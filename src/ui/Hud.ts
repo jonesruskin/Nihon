@@ -1,0 +1,133 @@
+// Minimal, diegetic-feeling HUD: loading veil, place card, clock, compass,
+// context prompts and toasts. Plain DOM, styled in style.css.
+
+export interface PlaceCard {
+  kanji: string
+  reading?: string
+  romaji?: string
+  meaning?: string
+  sub?: string
+}
+
+export class Hud {
+  readonly root: HTMLDivElement
+  private loading: HTMLDivElement
+  private loadingStatus: HTMLDivElement
+  private loadingBar: HTMLDivElement
+  private place: HTMLDivElement
+  private clock: HTMLDivElement
+  private compass: HTMLDivElement
+  private prompt: HTMLDivElement
+  private toasts: HTMLDivElement
+  private hints: HTMLDivElement
+  private debug: HTMLDivElement
+  private placeTimer = 0
+
+  constructor(parent: HTMLElement) {
+    this.root = document.createElement('div')
+    this.root.className = 'hud'
+    parent.appendChild(this.root)
+    this.root.innerHTML = `
+      <div class="loading">
+        <div class="loading-mark">日本</div>
+        <div class="loading-title">NIHON</div>
+        <div class="loading-sub">Japan, rebuilt from open data</div>
+        <div class="loading-bar"><div></div></div>
+        <div class="loading-status">Preparing…</div>
+        <div class="loading-credit">地理院タイル · PLATEAU · © OpenStreetMap contributors</div>
+      </div>
+      <div class="place"></div>
+      <div class="clock"></div>
+      <div class="compass"><div class="compass-strip"></div><div class="compass-needle"></div></div>
+      <div class="prompt"></div>
+      <div class="toasts"></div>
+      <div class="hints"></div>
+      <div class="debug"></div>`
+    const q = <T extends HTMLElement>(s: string) => this.root.querySelector(s) as T
+    this.loading = q('.loading')
+    this.loadingStatus = q('.loading-status')
+    this.loadingBar = q('.loading-bar > div')
+    this.place = q('.place')
+    this.clock = q('.clock')
+    this.compass = q('.compass-strip')
+    this.prompt = q('.prompt')
+    this.toasts = q('.toasts')
+    this.hints = q('.hints')
+    this.debug = q('.debug')
+    // Compass strip: cardinal + intercardinal labels repeated.
+    const labels = ['N 北', 'NE', 'E 東', 'SE', 'S 南', 'SW', 'W 西', 'NW']
+    let html = ''
+    for (let r = 0; r < 3; r++) for (let i = 0; i < 8; i++) html += `<span class="${labels[i].length > 2 ? 'major' : ''}">${labels[i]}</span>`
+    this.compass.innerHTML = html
+    if (new URLSearchParams(location.search).has('debug')) this.debug.style.display = 'block'
+  }
+
+  setLoading(progress: number, status: string): void {
+    this.loadingBar.style.width = `${Math.round(Math.min(1, progress) * 100)}%`
+    this.loadingStatus.textContent = status
+  }
+
+  hideLoading(): void {
+    this.loading.classList.add('done')
+  }
+
+  showLoading(status: string): void {
+    this.loading.classList.remove('done')
+    this.setLoading(0, status)
+  }
+
+  showPlace(card: PlaceCard): void {
+    this.place.innerHTML = `
+      ${card.reading ? `<div class="place-reading">${card.reading}</div>` : ''}
+      <div class="place-kanji">${card.kanji}</div>
+      ${card.romaji ? `<div class="place-romaji">${card.romaji}</div>` : ''}
+      ${card.meaning ? `<div class="place-meaning">${card.meaning}</div>` : ''}
+      ${card.sub ? `<div class="place-sub">${card.sub}</div>` : ''}`
+    this.place.classList.remove('show')
+    void this.place.offsetWidth
+    this.place.classList.add('show')
+    clearTimeout(this.placeTimer)
+    this.placeTimer = window.setTimeout(() => this.place.classList.remove('show'), 6500)
+  }
+
+  setClock(text: string): void {
+    if (this.clock.textContent !== text) this.clock.textContent = text
+  }
+
+  /** heading: radians, 0 = north, positive = towards west (three.js yaw). */
+  setCompass(yaw: number): void {
+    const deg = ((-yaw * 180) / Math.PI + 360) % 360
+    // 8 labels per 360°, each label 60px wide -> 480px per turn
+    const px = (deg / 360) * 480
+    this.compass.style.transform = `translateX(${-px - 480 + 150}px)`
+  }
+
+  setPrompt(html: string | null): void {
+    if (!html) {
+      this.prompt.classList.remove('show')
+      return
+    }
+    if (this.prompt.innerHTML !== html) this.prompt.innerHTML = html
+    this.prompt.classList.add('show')
+  }
+
+  toast(html: string, ms = 4000): void {
+    const el = document.createElement('div')
+    el.className = 'toast'
+    el.innerHTML = html
+    this.toasts.appendChild(el)
+    requestAnimationFrame(() => el.classList.add('show'))
+    setTimeout(() => {
+      el.classList.remove('show')
+      setTimeout(() => el.remove(), 600)
+    }, ms)
+  }
+
+  setHints(html: string): void {
+    if (this.hints.innerHTML !== html) this.hints.innerHTML = html
+  }
+
+  setDebug(text: string): void {
+    if (this.debug.style.display === 'block') this.debug.textContent = text
+  }
+}

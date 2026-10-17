@@ -200,8 +200,9 @@ export class TerrainManager {
   private camLat = 0
   private camLon = 0
   private camH = 0
-  /** Fires when a z>=15 tile becomes ready (physics/scatter can attach). */
-  onDetailTile: ((id: TileId, grid: GridData, anchor: LocalFrame) => void) | null = null
+  /** Fires when a max-zoom tile becomes ready (physics attaches its grid). */
+  onDetailTile: ((key: string, group: Group, grid: GridData) => void) | null = null
+  onTileDisposed: ((key: string) => void) | null = null
 
   constructor(
     private world: WorldFrame,
@@ -340,7 +341,7 @@ export class TerrainManager {
       t.dem = dem
       t.positions = grid.positions
       t.state = 'ready'
-      if (id.z >= 15 && this.onDetailTile) this.onDetailTile(id, grid, frame)
+      if (id.z >= 17 && this.onDetailTile) this.onDetailTile(tileKey(id), group, grid)
     } catch (e) {
       console.warn('terrain tile failed', tileKey(id), e)
       t.state = 'error'
@@ -366,7 +367,20 @@ export class TerrainManager {
           })
         }
         this.tiles.delete(k)
+        this.onTileDisposed?.(k)
       }
     }
   }
+
+  /** Is the terrain under a point drawn at full detail yet? */
+  isDetailedAt(lat: number, lon: number): boolean {
+    for (const t of this.visible) {
+      if (t.id.z < 17) continue
+      const b = tileBounds(t.id)
+      if (lon >= b.west && lon <= b.east && lat >= b.south && lat <= b.north) return true
+    }
+    return false
+  }
 }
+
+export { GRID_INDICES }

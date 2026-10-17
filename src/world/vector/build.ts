@@ -1,0 +1,845 @@
+// Turns one OpenMapTiles z14 vector tile into renderable Japanese streetscape:
+// roads with markings, sidewalks, elevated expressways and railways, water,
+// trees, OSM buildings (where PLATEAU has no model) with Japanese roofs,
+// utility poles + wires, street lights, vending machines, POIs and a
+// navigation network. Pure function; runs in a worker.
+import { VectorTile, type VectorTileFeature } from '@mapbox/vector-tile'
+import { PbfReader } from 'pbf'
+import earcut from 'earcut'
+import { tileCenter, tileXToLon, tileYToLat, type TileId } from '../../core/tiles'
+import { WGS84_A, WGS84_E2 } from '../../core/geo'
+import { surfaceHeight, type DemLike } from '../terrain/surface'
+import { MeshBuilder, type MeshData } from './MeshBuilder'
+import { centroid, densify, hash2, minAreaRect, pointInRing, polygonArea, rng, sampleAlong, type P2 } from './geom'
+
+export interface BuildRequest {
+  id: TileId
+  pbf: ArrayBuffer
+  dem: DemLike
+  /** PLATEAU coverage boxes [w,s,e,n] in degrees: skip OSM buildings inside. */
+  coverage: Array<[number, number, number, number]>
+  detail: number // 0..1 density scale for props/trees
+}
+
+export interface Poi {
+  name: string
+  nameEn: string
+  cls: string
+  sub: string
+  lat: number
+  lon: number
+  x: number
+  y: number
+  z: number
+}
+
+export interface Place {
+  name: string
+  reading: string
+  romaji: string
+  nameEn: string
+  cls: string
+  rank: number
+  lat: number
+  lon: number
+}
+
+export interface NavPath {
+  kind: 'road' | 'foot' | 'rail'
+  cls: string
+  oneway: number
+  width: number
+  name: string
+  bridge: boolean
+  pts: Float32Array // xyz triplets (anchor frame)
+}
+
+export interface TileBuild {
+  id: TileId
+  anchor: { lat: number; lon: number }
+  buildings: MeshData | null
+  roofs: MeshData | null
+  roads: MeshData | null
+  sidewalks: MeshData | null
+  ballast: MeshData | null
+  rails: MeshData | null
+  structures: MeshData | null
+  water: MeshData | null
+  instances: Record<string, Float32Array>
+  wires: Float32Array
+  pois: Poi[]
+  places: Place[]
+  paths: NavPath[]
+  stats: Record<string, number>
+}
+
+const EARTH_R = 6371000
+
+interface RoadSpec {
+  w: number
+  cls: number
+  side: number
+  lanes: number
+}
+const ROADS: Record<string, RoadSpec> = {
+  motorway: { w: 7.6, cls: 0, side: 0, lanes: 2 },
+  trunk: { w: 12, cls: 1, side: 3, lanes: 4 },
+  primary: { w: 11, cls: 2, side: 3, lanes: 4 },
+  secondary: { w: 9, cls: 3, side: 2.5, lanes: 2 },
+  tertiary: { w: 7, cls: 4, side: 2, lanes: 2 },
+  busway: { w: 7, cls: 4, side: 0, lanes: 2 },
+  minor: { w: 5, cls: 5, side: 0, lanes: 1 },
+  service: { w: 3.6, cls: 6, side: 0, lanes: 1 },
+  track: { w: 3, cls: 7, side: 0, lanes: 1 },
+  raceway: { w: 8, cls: 4, side: 0, lanes: 2 },
+}
+const FOOT: Record<string, number> = { footway: 2.2, pedestrian: 5, path: 1.8, cycleway: 2.2, steps: 2.4, bridleway: 2, corridor: 0, platform: 0 }
+
+type Inst = number[]
+
+export function buildTile(req: BuildRequest): TileBuild {
+  const { id, dem } = req
+  const tile = new VectorTile(new PbfReader(new Uint8Array(req.pbf)))
+  const anchor = tileCenter(id)
+  const phi = (anchor.lat * Math.PI) / 180
+  const sp = Math.sin(phi)
+  const w = Math.sqrt(1 - WGS84_E2 * sp * sp)
+  const mLat = ((WGS84_A * (1 - WGS84_E2)) / (w * w * w)) * (Math.PI / 180)
+  const mLon = (WGS84_A / w) * Math.cos(phi) * (Math.PI / 180)
+  const lonOf = (x: number) => anchor.lon + x / mLon
+  const latOf = (n: number) => anchor.lat + n / mLat
+  const ground = (x: number, n: number) => surfaceHeight(dem, lonOf(x), latOf(n))
+  const drop = (x: number, n: number) => (x * x + n * n) / (2 * EARTH_R)
+  const R = rng(id.x * 73856093 ^ id.y * 19349663)
+
+  const extentToLocal = (ext: number, px: number, py: number): P2 => {
+    const lon = tileXToLon(id.x + px / ext, id.z)
+    const lat = tileYToLat(id.y + py / ext, id.z)
+    return [(lon - anchor.lon) * mLon, (lat - anchor.lat) * mLat]
+  }
+  // Clip helper: features carry a buffer beyond the tile; keep geometry whose
+  // reference point lies inside this tile so neighbours don't duplicate it.
+  const half = 40075016.686 * Math.cos(phi) / 2 ** id.z / 2
+  const inTile = (p: P2) => Math.abs(p[0]) <= half * 1.0001 && Math.abs(p[1]) <= half * 1.0001
+
+  const instances: Record<string, Inst> = {
+    tree: [],
+    pole: [],
+    light: [],
+    vending: [],
+    pillar: [],
+    signal: [],
+  }
+  const wires: number[] = []
+  const pois: Poi[] = []
+  const paths: NavPath[] = []
+  const stats: Record<string, number> = {}
+
+  const V = (x: number, n: number, h: number): [number, number, number] => [x, h - drop(x, n), -n]
+
+  // ---------------------------------------------------------------- roads
+  const roads = new MeshBuilder(true, { road: 4 })
+  const sidewalks = new MeshBuilder(true)
+  const structures = new MeshBuilder(false)
+  const ballast = new MeshBuilder(true)
+  const rails = new MeshBuilder(false)
+
+  const tl = tile.layers.transportation
+  interface Line {
+    pts: P2[]
+    props: VectorTileFeature['properties']
+    ext: number
+    keys: string[]
+  }
+  const lines: Line[] = []
+  const degree = new Map<string, number>()
+  const bridgeEnds = new Map<string, number>()
+  if (tl) {
+    for (let i = 0; i < tl.length; i++) {
+      const f = tl.feature(i)
+      if (f.type !== 2) continue
+      const props = f.properties
+      if (props.brunnel === 'tunnel') continue
+      for (const g of f.loadGeometry()) {
+        if (g.length < 2) continue
+        const keys = g.map((p) => `${p.x},${p.y}`)
+        keys.forEach((k, j) => degree.set(k, (degree.get(k) ?? 0) + (j === 0 || j === keys.length - 1 ? 1 : 2)))
+        if (props.brunnel === 'bridge') {
+          for (const k of [keys[0], keys[keys.length - 1]]) bridgeEnds.set(k, (bridgeEnds.get(k) ?? 0) + 1)
+        }
+        lines.push({ pts: g.map((p) => extentToLocal(tl.extent, p.x, p.y)), props, ext: tl.extent, keys })
+      }
+    }
+  }
+
+  /** Distance along a polyline to the nearest junction at either end. */
+  const junctionAt = (k: string) => (degree.get(k) ?? 0) >= 3
+
+  for (const L of lines) {
+    const cls = String(L.props.class ?? '')
+    const sub = String(L.props.subclass ?? '')
+    const isRail = cls === 'rail' || cls === 'transit'
+    const spec = ROADS[cls]
+    const footW = cls === 'path' ? FOOT[sub] ?? 1.8 : 0
+    if (!spec && !footW && !isRail) continue
+    const mid = L.pts[Math.floor(L.pts.length / 2)]
+    if (!inTile(mid)) continue
+    const bridge = L.props.brunnel === 'bridge'
+    const layer = Number(L.props.layer ?? (bridge ? 1 : 0))
+    const ramp = Number(L.props.ramp ?? 0) === 1
+    const width = isRail ? 3.6 : spec ? (ramp ? 5 : spec.w) : footW
+    const pts = densify(L.pts, 6)
+    // Distances along
+    const sAlong: number[] = [0]
+    for (let i = 1; i < pts.length; i++) sAlong.push(sAlong[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]))
+    const total = sAlong[sAlong.length - 1]
+    if (total < 0.5) continue
+    const startJ = junctionAt(L.keys[0])
+    const endJ = junctionAt(L.keys[L.keys.length - 1])
+
+    // Deck/ground heights.
+    const g = pts.map((p) => ground(p[0], p[1]))
+    let h = g.map((v) => v + (isRail ? 0.25 : 0.12) + (spec ? (6 - spec.cls) * 0.004 : 0))
+    let elevated = false
+    if (bridge) {
+      const g0 = g[0]
+      const g1 = g[g.length - 1]
+      const bigStructure = (cls === 'motorway' || cls === 'trunk' || isRail) && layer >= 1
+      const lift = bigStructure ? 6.5 * Math.min(layer, 3) : 0
+      const startHeld = (bridgeEnds.get(L.keys[0]) ?? 0) >= 2
+      const endHeld = (bridgeEnds.get(L.keys[L.keys.length - 1]) ?? 0) >= 2
+      h = pts.map((_, i) => {
+        const t = sAlong[i] / total
+        const base = g0 + (g1 - g0) * t
+        const rampIn = startHeld ? 1 : Math.min(1, sAlong[i] / 140)
+        const rampOut = endHeld ? 1 : Math.min(1, (total - sAlong[i]) / 140)
+        const deck = base + lift * Math.min(rampIn, rampOut) + 0.6
+        return Math.max(deck, g[i] + 0.4)
+      })
+      elevated = h.some((v, i) => v - g[i] > 3)
+    }
+
+    // Ribbon
+    const target = isRail ? ballast : spec ? roads : sidewalks
+    const halfW = width / 2
+    let prev: number[] | null = null
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[Math.max(0, i - 1)]
+      const b = pts[Math.min(pts.length - 1, i + 1)]
+      let tx = b[0] - a[0]
+      let ty = b[1] - a[1]
+      const tl2 = Math.hypot(tx, ty) || 1
+      tx /= tl2
+      ty /= tl2
+      const nx = ty
+      const ny = -tx // right-hand normal
+      const s = sAlong[i]
+      const jd = Math.min(startJ ? s : 1e4, endJ ? total - s : 1e4)
+      const p = pts[i]
+      const l = V(p[0] - nx * halfW, p[1] - ny * halfW, h[i])
+      const r = V(p[0] + nx * halfW, p[1] + ny * halfW, h[i])
+      const extra = spec ? [halfW, spec.cls + (ramp ? 0.5 : 0), jd, spec.lanes] : []
+      const vl = target.vertex(l[0], l[1], l[2], 0, 1, 0, -halfW, s, ...extra)
+      const vr = target.vertex(r[0], r[1], r[2], 0, 1, 0, halfW, s, ...extra)
+      if (prev) target.quadUp(prev[0], vl, vr, prev[1])
+      prev = [vl, vr]
+    }
+    // Sidewalks along major roads (Japan: raised kerb, pavers).
+    if (spec && spec.side > 0 && !bridge && req.detail >= 1) {
+      for (const sign of [-1, 1]) {
+        let pv: number[] | null = null
+        for (let i = 0; i < pts.length; i++) {
+          const a = pts[Math.max(0, i - 1)]
+          const b = pts[Math.min(pts.length - 1, i + 1)]
+          let tx = b[0] - a[0]
+          let ty = b[1] - a[1]
+          const l2 = Math.hypot(tx, ty) || 1
+          tx /= l2
+          ty /= l2
+          const nx = ty * sign
+          const ny = -tx * sign
+          const s = sAlong[i]
+          const jd = Math.min(startJ ? s : 1e4, endJ ? total - s : 1e4)
+          if (jd < 6) {
+            pv = null
+            continue
+          }
+          const p = pts[i]
+          const hh = h[i] + 0.15
+          const i0 = V(p[0] + nx * halfW, p[1] + ny * halfW, hh)
+          const o0 = V(p[0] + nx * (halfW + spec.side), p[1] + ny * (halfW + spec.side), hh)
+          const k0 = V(p[0] + nx * halfW, p[1] + ny * halfW, h[i])
+          const vi = sidewalks.vertex(i0[0], i0[1], i0[2], 0, 1, 0, 0, s)
+          const vo = sidewalks.vertex(o0[0], o0[1], o0[2], 0, 1, 0, spec.side, s)
+          const vk = sidewalks.vertex(k0[0], k0[1], k0[2], nx * -1, 0, ny, -0.15, s)
+          const vk2 = sidewalks.vertex(i0[0], i0[1], i0[2], nx * -1, 0, ny, 0, s)
+          if (pv) {
+            sidewalks.quadUp(pv[0], vi, vo, pv[1])
+            sidewalks.quad(pv[2], vk, vk2, pv[3])
+            sidewalks.quad(pv[2], vk2, vk, pv[3])
+          }
+          pv = [vi, vo, vk, vk2]
+        }
+      }
+    }
+    // Viaduct structure: deck slab sides + parapets + pillars.
+    if (bridge && elevated) {
+      const thick = 1.6
+      for (const sign of [-1, 1]) {
+        let pv: number[] | null = null
+        for (let i = 0; i < pts.length; i++) {
+          const a = pts[Math.max(0, i - 1)]
+          const b = pts[Math.min(pts.length - 1, i + 1)]
+          let tx = b[0] - a[0]
+          let ty = b[1] - a[1]
+          const l2 = Math.hypot(tx, ty) || 1
+          tx /= l2
+          ty /= l2
+          const nx = ty * sign
+          const ny = -tx * sign
+          const p = pts[i]
+          const ex = p[0] + nx * (halfW + 0.3)
+          const ey = p[1] + ny * (halfW + 0.3)
+          const top = V(ex, ey, h[i] + 1.1)
+          const bot = V(ex, ey, h[i] - thick)
+          const vt = structures.vertex(top[0], top[1], top[2], nx, 0, -ny)
+          const vb = structures.vertex(bot[0], bot[1], bot[2], nx, 0, -ny)
+          if (pv) {
+            if (sign > 0) structures.quad(pv[1], vb, vt, pv[0])
+            else structures.quad(pv[0], vt, vb, pv[1])
+          }
+          pv = [vt, vb]
+        }
+      }
+      // underside
+      let pu: number[] | null = null
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[Math.max(0, i - 1)]
+        const b = pts[Math.min(pts.length - 1, i + 1)]
+        let tx = b[0] - a[0]
+        let ty = b[1] - a[1]
+        const l2 = Math.hypot(tx, ty) || 1
+        tx /= l2
+        ty /= l2
+        const p = pts[i]
+        const l = V(p[0] - ty * (halfW + 0.3), p[1] + tx * (halfW + 0.3), h[i] - 1.6)
+        const r = V(p[0] + ty * (halfW + 0.3), p[1] - tx * (halfW + 0.3), h[i] - 1.6)
+        const vl = structures.vertex(l[0], l[1], l[2], 0, -1, 0)
+        const vr = structures.vertex(r[0], r[1], r[2], 0, -1, 0)
+        if (pu) {
+          structures.quad(pu[1], vr, vl, pu[0])
+          structures.quad(pu[0], vl, vr, pu[1])
+        }
+        pu = [vl, vr]
+      }
+      for (const sm of sampleAlong(pts, 28)) {
+        const gh = ground(sm.p[0], sm.p[1])
+        const i = Math.min(pts.length - 1, Math.round((sm.s / total) * (pts.length - 1)))
+        const clearance = h[i] - 1.6 - gh
+        if (clearance > 2.5) {
+          const v = V(sm.p[0], sm.p[1], gh)
+          instances.pillar.push(v[0], v[1], v[2], Math.atan2(sm.t[0], sm.t[1]), clearance, Math.max(1, width / 7))
+        }
+      }
+    }
+
+    // Rails: two steel rails per track.
+    if (isRail) {
+      const gauge = sub === 'rail' && /新幹線|Shinkansen/.test(String(L.props.name ?? '')) ? 1.435 : 1.067
+      for (const off of [-gauge / 2, gauge / 2]) {
+        let pv: number[] | null = null
+        for (let i = 0; i < pts.length; i++) {
+          const a = pts[Math.max(0, i - 1)]
+          const b = pts[Math.min(pts.length - 1, i + 1)]
+          let tx = b[0] - a[0]
+          let ty = b[1] - a[1]
+          const l2 = Math.hypot(tx, ty) || 1
+          tx /= l2
+          ty /= l2
+          const p = pts[i]
+          const c = [p[0] + ty * off, p[1] - tx * off]
+          const t1 = V(c[0] - ty * 0.035, c[1] + tx * 0.035, h[i] + 0.17)
+          const t2 = V(c[0] + ty * 0.035, c[1] - tx * 0.035, h[i] + 0.17)
+          const vt1 = rails.vertex(t1[0], t1[1], t1[2], 0, 1, 0)
+          const vt2 = rails.vertex(t2[0], t2[1], t2[2], 0, 1, 0)
+          if (pv) rails.quadUp(pv[0], vt1, vt2, pv[1])
+          pv = [vt1, vt2]
+        }
+      }
+    }
+
+    // Navigation path
+    const p3 = new Float32Array(pts.length * 3)
+    pts.forEach((p, i) => p3.set(V(p[0], p[1], h[i]), i * 3))
+    paths.push({
+      kind: isRail ? 'rail' : spec ? 'road' : 'foot',
+      cls: isRail ? sub || cls : cls,
+      oneway: Number(L.props.oneway ?? 0),
+      width,
+      name: String(L.props.name ?? ''),
+      bridge,
+      pts: p3,
+    })
+
+    // Roadside furniture (not on bridges).
+    if (spec && !bridge) {
+      const urbanMajor = spec.cls >= 1 && spec.cls <= 3
+      const seed = hash2(mid[0], mid[1])
+      if (urbanMajor && req.detail >= 1) {
+        for (const sm of sampleAlong(pts, 30)) {
+          const side = (Math.floor(sm.s / 30) % 2) * 2 - 1
+          const off = halfW + 0.45
+          const px = sm.p[0] + sm.t[1] * off * side
+          const py = sm.p[1] - sm.t[0] * off * side
+          const v = V(px, py, ground(px, py) + 0.15)
+          instances.light.push(v[0], v[1], v[2], Math.atan2(-sm.t[1] * side, sm.t[0] * side), 1, 0)
+        }
+        if (spec.side > 0) {
+          for (const sm of sampleAlong(pts, 9)) {
+            for (const side of [-1, 1]) {
+              if (R() < 0.25) continue
+              const off = halfW + Math.min(1.4, spec.side * 0.55)
+              const px = sm.p[0] + sm.t[1] * off * side
+              const py = sm.p[1] - sm.t[0] * off * side
+              const v = V(px, py, ground(px, py) + 0.15)
+              instances.tree.push(v[0], v[1], v[2], R() * 6.28, 0.8 + R() * 0.35, seed < 0.5 ? 3 : 0)
+            }
+          }
+        }
+      }
+      // Utility poles + overhead wires: the defining look of Japanese streets.
+      if (req.detail >= 1 && spec.cls >= 3 && spec.cls <= 6) {
+        const side = seed < 0.5 ? -1 : 1
+        const spacing = 32
+        let last: [number, number, number] | null = null
+        for (const sm of sampleAlong(pts, spacing, 8 + seed * 10)) {
+          const off = halfW + 0.35
+          const px = sm.p[0] + sm.t[1] * off * side
+          const py = sm.p[1] - sm.t[0] * off * side
+          const v = V(px, py, ground(px, py))
+          instances.pole.push(v[0], v[1], v[2], Math.atan2(sm.t[0], sm.t[1]), 1, R())
+          if (last) {
+            for (const [hgt, lat] of [
+              [10.6, -0.55],
+              [10.6, 0.55],
+              [9.9, 0],
+              [7.4, 0.25],
+              [6.6, 0.25],
+            ] as const) {
+              const ax = last[0] + sm.t[1] * lat * side
+              const az = last[2] - sm.t[0] * lat * side * -1
+              const bx = v[0] + sm.t[1] * lat * side
+              const bz = v[2] - sm.t[0] * lat * side * -1
+              const SEG = 4
+              for (let k = 0; k < SEG; k++) {
+                const t0 = k / SEG
+                const t1 = (k + 1) / SEG
+                const sag = (t: number) => 4 * t * (1 - t) * 0.35
+                wires.push(
+                  ax + (bx - ax) * t0,
+                  last[1] + hgt + (v[1] - last[1]) * t0 - sag(t0),
+                  az + (bz - az) * t0,
+                  ax + (bx - ax) * t1,
+                  last[1] + hgt + (v[1] - last[1]) * t1 - sag(t1),
+                  az + (bz - az) * t1,
+                )
+              }
+            }
+          }
+          last = v
+        }
+      }
+      // Vending machines: ~4 million in Japan, roughly one per 30 people.
+      if (req.detail >= 1 && spec.cls >= 4 && spec.cls <= 6) {
+        for (const sm of sampleAlong(pts, 70, 20 + R() * 40)) {
+          if (R() > 0.35 * req.detail + 0.1) continue
+          const side = R() < 0.5 ? -1 : 1
+          const off = halfW + 0.9
+          const px = sm.p[0] + sm.t[1] * off * side
+          const py = sm.p[1] - sm.t[0] * off * side
+          const v = V(px, py, ground(px, py))
+          const yaw = Math.atan2(-sm.t[1] * side, -sm.t[0] * side * -1)
+          const count = 1 + Math.floor(R() * 3)
+          for (let k = 0; k < count; k++) {
+            instances.vending.push(v[0] + sm.t[0] * k * 1.05, v[1], v[2] - sm.t[1] * k * 1.05, yaw, 1, R())
+          }
+        }
+      }
+    }
+  }
+  // Traffic signals at junctions of major roads.
+  for (const [k, d] of degree) {
+    if (d < 3) continue
+    const [ex, ey] = k.split(',').map(Number)
+    if (!tl) break
+    const p = extentToLocal(tl.extent, ex, ey)
+    if (!inTile(p)) continue
+    // Only where a tertiary-or-bigger road meets.
+    const major = lines.some((L) => (L.keys[0] === k || L.keys[L.keys.length - 1] === k) && ['primary', 'secondary', 'tertiary', 'trunk'].includes(String(L.props.class)))
+    if (!major) continue
+    const v = V(p[0] + 5, p[1] + 5, ground(p[0] + 5, p[1] + 5) + 0.15)
+    instances.signal.push(v[0], v[1], v[2], R() * 6.28, 1, 0)
+  }
+  stats.roads = lines.length
+
+  // --------------------------------------------------------------- water
+  const water = new MeshBuilder(true)
+  const wl = tile.layers.water
+  if (wl) {
+    for (let i = 0; i < wl.length; i++) {
+      const f = wl.feature(i)
+      const cls = String(f.properties.class)
+      if (cls === 'ocean') continue
+      for (const poly of classifyRings(f.loadGeometry())) {
+        const rings = poly.map((r) => r.map((p) => extentToLocal(wl.extent, p.x, p.y)))
+        const outer = rings[0]
+        if (!inTile(centroid(outer))) continue
+        const hs = outer.map((p) => ground(p[0], p[1]))
+        const lo = Math.min(...hs)
+        const hi = Math.max(...hs)
+        if (hi - lo > 4 && cls === 'river') continue
+        const flat: number[] = []
+        const holes: number[] = []
+        for (const r of rings) {
+          if (flat.length) holes.push(flat.length / 2)
+          for (const p of r) flat.push(p[0], p[1])
+        }
+        const tri = earcut(flat, holes)
+        const base = water.vertexCount
+        for (let k = 0; k < flat.length; k += 2) {
+          const v = V(flat[k], flat[k + 1], lo - 0.35)
+          water.vertex(v[0], v[1], v[2], 0, 1, 0, flat[k] / 30, flat[k + 1] / 30)
+        }
+        for (let k = 0; k < tri.length; k += 3) water.triUp(base + tri[k], base + tri[k + 1], base + tri[k + 2])
+      }
+    }
+  }
+
+  // ------------------------------------------------------------- landcover
+  const lc = tile.layers.landcover
+  const treeBudget = req.detail >= 1 ? 3500 : 0
+  let treeCount = instances.tree.length / 6
+  if (lc) {
+    for (let i = 0; i < lc.length && treeCount < treeBudget; i++) {
+      const f = lc.feature(i)
+      const cls = String(f.properties.class)
+      const sub = String(f.properties.subclass)
+      const isWood = cls === 'wood'
+      const isPark = cls === 'grass' && (sub === 'park' || sub === 'garden' || sub === 'grass')
+      if (!isWood && !isPark) continue
+      const spacing = isWood ? 9 : 16
+      for (const poly of classifyRings(f.loadGeometry())) {
+        const rings = poly.map((r) => r.map((p) => extentToLocal(lc.extent, p.x, p.y)))
+        const outer = rings[0]
+        let minX = Infinity
+        let minY = Infinity
+        let maxX = -Infinity
+        let maxY = -Infinity
+        for (const p of outer) {
+          minX = Math.min(minX, p[0])
+          maxX = Math.max(maxX, p[0])
+          minY = Math.min(minY, p[1])
+          maxY = Math.max(maxY, p[1])
+        }
+        minX = Math.max(minX, -half)
+        minY = Math.max(minY, -half)
+        maxX = Math.min(maxX, half)
+        maxY = Math.min(maxY, half)
+        for (let gx = Math.ceil(minX / spacing) * spacing; gx < maxX; gx += spacing) {
+          for (let gy = Math.ceil(minY / spacing) * spacing; gy < maxY; gy += spacing) {
+            if (treeCount >= treeBudget) break
+            const jx = gx + (hash2(gx, gy) - 0.5) * spacing * 0.9
+            const jy = gy + (hash2(gy, gx) - 0.5) * spacing * 0.9
+            if (!pointInRing(jx, jy, outer)) continue
+            if (rings.slice(1).some((r) => pointInRing(jx, jy, r))) continue
+            const gh = ground(jx, jy)
+            const v = V(jx, jy, gh)
+            const r = hash2(jx * 1.3, jy * 0.7)
+            // Type: conifer plantations (sugi/hinoki) dominate Japanese mountain
+            // forests; parks mix broadleaf, sakura and pine.
+            let type = 0
+            if (isWood) type = gh > 150 || sub === 'forest' ? (r < 0.65 ? 1 : r < 0.75 ? 4 : 0) : r < 0.3 ? 1 : r < 0.4 ? 5 : 0
+            else type = r < 0.35 ? 2 : r < 0.5 ? 4 : r < 0.6 ? 3 : 0
+            instances.tree.push(v[0], v[1], v[2], r * 6.28, 0.75 + hash2(jy, jx * 3) * 0.6, type)
+            treeCount++
+          }
+        }
+      }
+    }
+  }
+  stats.trees = treeCount
+
+  // ------------------------------------------------------------- buildings
+  const buildings = new MeshBuilder(false, { bh: 1, seed: 1, kind: 1 })
+  const roofs = new MeshBuilder(true, { seed: 1 })
+  const bl = tile.layers.building
+  let skipped = 0
+  if (bl) {
+    for (let i = 0; i < bl.length; i++) {
+      const f = bl.feature(i)
+      if (f.properties.hide_3d) continue
+      const height = Number(f.properties.render_height ?? 6)
+      const minH = Number(f.properties.render_min_height ?? 0)
+      for (const poly of classifyRings(f.loadGeometry())) {
+        const rings = poly.map((r) => r.map((p) => extentToLocal(bl.extent, p.x, p.y)))
+        const outer = rings[0]
+        if (outer.length < 3) continue
+        const c = centroid(outer)
+        if (!inTile(c)) continue
+        const clat = latOf(c[1])
+        const clon = lonOf(c[0])
+        if (req.coverage.some((b) => clon >= b[0] && clon <= b[2] && clat >= b[1] && clat <= b[3])) {
+          skipped++
+          continue
+        }
+        const area = Math.abs(polygonArea(outer))
+        if (area < 6) continue
+        const seed = hash2(Math.round(c[0] * 10), Math.round(c[1] * 10))
+        const gs = outer.map((p) => ground(p[0], p[1]))
+        const gmin = Math.min(...gs)
+        const gmax = Math.max(...gs)
+        let kind = 0
+        // OSM in Japan: untagged heights default to ~5 m; most are houses.
+        if (area < 220 && height <= 10) kind = 1
+        else if (area > 2500 && height < 16) kind = 4
+        else if (height > 70) kind = seed > 0.35 ? 3 : 2
+        else kind = 2
+        let wallTop = gmax + Math.max(height, kind === 1 ? 6.2 : 3)
+        const base = gmin - 1.2 + minH
+        const obb = kind === 1 ? minAreaRect(outer) : null
+        const pitched = !!obb && area / obb.area > 0.72 && obb.halfShort < 9 && obb.halfShort > 1.5
+        let roofH = 0
+        if (pitched) {
+          roofH = obb!.halfShort * (0.42 + seed * 0.15)
+          wallTop -= roofH * 0.35
+        }
+        // Walls
+        for (const ring of rings) {
+          for (let k = 0; k < ring.length; k++) {
+            const a = ring[k]
+            const b = ring[(k + 1) % ring.length]
+            const dx = b[0] - a[0]
+            const dy = b[1] - a[1]
+            const len = Math.hypot(dx, dy)
+            if (len < 0.05) continue
+            const nx = dy / len
+            const ny = -dx / len
+            const a0 = V(a[0], a[1], base)
+            const a1 = V(a[0], a[1], wallTop)
+            const b0 = V(b[0], b[1], base)
+            const b1 = V(b[0], b[1], wallTop)
+            const ga = ground(a[0], a[1])
+            const gb = ground(b[0], b[1])
+            const v0 = buildings.vertex(a0[0], a0[1], a0[2], nx, 0, -ny, 0, 0, base - ga, seed, kind)
+            const v1 = buildings.vertex(b0[0], b0[1], b0[2], nx, 0, -ny, 0, 0, base - gb, seed, kind)
+            const v2 = buildings.vertex(b1[0], b1[1], b1[2], nx, 0, -ny, 0, 0, wallTop - gb, seed, kind)
+            const v3 = buildings.vertex(a1[0], a1[1], a1[2], nx, 0, -ny, 0, 0, wallTop - ga, seed, kind)
+            buildings.quad(v0, v1, v2, v3)
+          }
+        }
+        if (pitched) {
+          addHouseRoof(roofs, buildings, obb!, wallTop, roofH, seed, V, kind)
+        } else {
+          // Flat roof
+          const flat: number[] = []
+          const holes: number[] = []
+          for (const r of rings) {
+            if (flat.length) holes.push(flat.length / 2)
+            for (const p of r) flat.push(p[0], p[1])
+          }
+          const tri = earcut(flat, holes)
+          const b0 = buildings.vertexCount
+          for (let k = 0; k < flat.length; k += 2) {
+            const v = V(flat[k], flat[k + 1], wallTop)
+            buildings.vertex(v[0], v[1], v[2], 0, 1, 0, 0, 0, wallTop - gmin, seed, kind)
+          }
+          for (let k = 0; k < tri.length; k += 3) buildings.triUp(b0 + tri[k], b0 + tri[k + 1], b0 + tri[k + 2])
+        }
+      }
+    }
+  }
+  stats.osmBuildings = bl ? bl.length - skipped : 0
+  stats.skippedForPlateau = skipped
+
+  // ------------------------------------------------------------------ POIs
+  const pl = tile.layers.poi
+  if (pl) {
+    for (let i = 0; i < pl.length; i++) {
+      const f = pl.feature(i)
+      const g = f.loadGeometry()[0]?.[0]
+      if (!g) continue
+      const p = extentToLocal(pl.extent, g.x, g.y)
+      if (!inTile(p)) continue
+      const props = f.properties
+      const v = V(p[0], p[1], ground(p[0], p[1]))
+      pois.push({
+        name: String(props.name ?? ''),
+        nameEn: String(props['name:en'] ?? props.name_en ?? props['name:latin'] ?? ''),
+        cls: String(props.class ?? ''),
+        sub: String(props.subclass ?? ''),
+        lat: latOf(p[1]),
+        lon: lonOf(p[0]),
+        x: v[0],
+        y: v[1],
+        z: v[2],
+      })
+      if (props.class === 'shop' && props.subclass === 'convenience') {
+        const vv = V(p[0] + 3, p[1], ground(p[0] + 3, p[1]))
+        instances.vending.push(vv[0], vv[1], vv[2], R() * 6.28, 1, R())
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- places
+  const places: Place[] = []
+  const plc = tile.layers.place
+  if (plc) {
+    for (let i = 0; i < plc.length; i++) {
+      const f = plc.feature(i)
+      const g = f.loadGeometry()[0]?.[0]
+      if (!g) continue
+      const p = extentToLocal(plc.extent, g.x, g.y)
+      if (!inTile(p)) continue
+      const pr = f.properties
+      places.push({
+        name: String(pr.name ?? ''),
+        reading: String(pr['name:ja-Hira'] ?? pr['name:ja_kana'] ?? ''),
+        romaji: String(pr['name:ja-Latn'] ?? pr['name:ja_rm'] ?? pr['name:latin'] ?? pr.name_en ?? ''),
+        nameEn: String(pr['name:en'] ?? pr.name_en ?? ''),
+        cls: String(pr.class ?? ''),
+        rank: Number(pr.rank ?? 99),
+        lat: latOf(p[1]),
+        lon: lonOf(p[0]),
+      })
+    }
+  }
+
+  const inst: Record<string, Float32Array> = {}
+  for (const [k, v] of Object.entries(instances)) inst[k] = new Float32Array(v)
+  return {
+    id,
+    anchor,
+    buildings: buildings.empty ? null : buildings.build(),
+    roofs: roofs.empty ? null : roofs.build(),
+    roads: roads.empty ? null : roads.build(),
+    sidewalks: sidewalks.empty ? null : sidewalks.build(),
+    ballast: ballast.empty ? null : ballast.build(),
+    rails: rails.empty ? null : rails.build(),
+    structures: structures.empty ? null : structures.build(),
+    water: water.empty ? null : water.build(),
+    instances: inst,
+    wires: new Float32Array(wires),
+    pois,
+    places,
+    paths,
+    stats,
+  }
+}
+
+/** Group vector-tile rings into polygons (outer ring + holes). */
+function classifyRings(rings: Array<Array<{ x: number; y: number }>>): Array<Array<Array<{ x: number; y: number }>>> {
+  const out: Array<Array<Array<{ x: number; y: number }>>> = []
+  let cur: Array<Array<{ x: number; y: number }>> | null = null
+  for (const r of rings) {
+    if (r.length < 3) continue
+    let a = 0
+    for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += (r[i].x - r[j].x) * (r[i].y + r[j].y)
+    if (a === 0) continue
+    // Spec: exterior rings are clockwise in tile space (y down).
+    const outer = a < 0
+    if (outer || !cur) {
+      cur = [r]
+      out.push(cur)
+    } else cur.push(r)
+  }
+  // Drop the closing duplicate point.
+  for (const poly of out)
+    for (const r of poly) {
+      const f = r[0]
+      const l = r[r.length - 1]
+      if (r.length > 1 && f.x === l.x && f.y === l.y) r.pop()
+    }
+  return out
+}
+
+type VFn = (x: number, n: number, h: number) => [number, number, number]
+
+/** Hipped (寄棟) or gabled (切妻) roof on the oriented bounding box. */
+function addHouseRoof(
+  roofs: MeshBuilder,
+  walls: MeshBuilder,
+  obb: ReturnType<typeof minAreaRect>,
+  eave: number,
+  roofH: number,
+  seed: number,
+  V: VFn,
+  kind: number,
+): void {
+  const over = 0.45
+  const L = obb.halfLong + over
+  const S = obb.halfShort + over
+  const ax = obb.ax
+  const ay = obb.ay
+  const bx = -ay
+  const by = ax
+  const P = (u: number, v: number, h: number) => V(obb.cx + ax * u + bx * v, obb.cy + ay * u + by * v, h)
+  const hip = seed > 0.45
+  const ridge = hip ? Math.max(0, L - S) : L
+  const top = eave + roofH
+  const eaveH = eave - over * (roofH / S)
+  const face = (pts: Array<[number, number, number]>, uvs: Array<[number, number]>) => {
+    const ab = [pts[1][0] - pts[0][0], pts[1][1] - pts[0][1], pts[1][2] - pts[0][2]]
+    const ac = [pts[2][0] - pts[0][0], pts[2][1] - pts[0][1], pts[2][2] - pts[0][2]]
+    let nx = ab[1] * ac[2] - ab[2] * ac[1]
+    let ny = ab[2] * ac[0] - ab[0] * ac[2]
+    let nz = ab[0] * ac[1] - ab[1] * ac[0]
+    const l = Math.hypot(nx, ny, nz) || 1
+    nx /= l
+    ny /= l
+    nz /= l
+    if (ny < 0) {
+      nx = -nx
+      ny = -ny
+      nz = -nz
+      pts.reverse()
+      uvs.reverse()
+    }
+    const idx = pts.map((p, i) => roofs.vertex(p[0], p[1], p[2], nx, ny, nz, uvs[i][0], uvs[i][1], seed))
+    for (let i = 1; i < idx.length - 1; i++) roofs.tri(idx[0], idx[i], idx[i + 1])
+  }
+  const slope = Math.hypot(S, roofH)
+  // Long sides
+  for (const s of [-1, 1]) {
+    face(
+      [P(-L, s * S, eaveH), P(L, s * S, eaveH), P(ridge, 0, top), P(-ridge, 0, top)],
+      [
+        [-L, 0],
+        [L, 0],
+        [ridge, slope],
+        [-ridge, slope],
+      ],
+    )
+  }
+  if (hip) {
+    for (const s of [-1, 1]) face([P(s * L, -S, eaveH), P(s * L, S, eaveH), P(s * ridge, 0, top)], [
+      [-S, 0],
+      [S, 0],
+      [0, Math.hypot(L - ridge, roofH)],
+    ])
+  } else {
+    // Gable end walls (wall material).
+    for (const s of [-1, 1]) {
+      const a = P(s * obb.halfLong, -obb.halfShort, eave)
+      const b = P(s * obb.halfLong, obb.halfShort, eave)
+      const c = P(s * obb.halfLong, 0, top - over * (roofH / S))
+      const nx = ax * s
+      const nz = -ay * s
+      const i0 = walls.vertex(a[0], a[1], a[2], nx, 0, nz, 0, 0, 6, seed, kind)
+      const i1 = walls.vertex(b[0], b[1], b[2], nx, 0, nz, 0, 0, 6, seed, kind)
+      const i2 = walls.vertex(c[0], c[1], c[2], nx, 0, nz, 0, 0, 6 + roofH, seed, kind)
+      // Two-sided: cheap and immune to footprint winding.
+      walls.tri(i0, i1, i2)
+      walls.tri(i1, i0, i2)
+    }
+  }
+}

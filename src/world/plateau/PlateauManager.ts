@@ -56,6 +56,10 @@ export class PlateauManager {
   private active = new Map<string, ActiveCity>()
   errorTarget = 24
   readonly facade: MeshStandardMaterial = createBuildingMaterial()
+  /** Mesh lifecycle hooks (physics colliders). */
+  onModel: ((key: string, mesh: Mesh) => void) | null = null
+  onModelDisposed: ((key: string) => void) | null = null
+  private modelSeq = 0
   /** Called when coverage changes so procedural buildings can be hidden. */
   onCoverageChange: (() => void) | null = null
 
@@ -90,6 +94,13 @@ export class PlateauManager {
   /** Whether any city with 3D models is near (even if not yet loaded). */
   hasCityNear(lat: number, lon: number): boolean {
     return this.citiesAt(lat, lon, 0.005).length > 0
+  }
+
+  /** Coverage boxes of all loaded cities intersecting a lat/lon box. */
+  coverageIn(w: number, s: number, e: number, n: number): Array<[number, number, number, number]> {
+    const out: Array<[number, number, number, number]> = []
+    for (const a of this.active.values()) for (const r of a.coverage) if (r[0] < e && r[2] > w && r[1] < n && r[3] > s) out.push(r)
+    return out
   }
 
   get activeNames(): string[] {
@@ -142,7 +153,18 @@ export class PlateauManager {
       walk((tileset as unknown as { root: RawTile }).root)
       this.onCoverageChange?.()
     })
-    tiles.addEventListener('load-model', ({ scene }: { scene: Object3D }) => this.prepareModel(scene))
+    tiles.addEventListener('load-model', ({ scene }: { scene: Object3D }) => {
+      this.prepareModel(scene)
+      const key = `${city.code}:${this.modelSeq++}`
+      scene.userData.nihonKey = key
+      let i = 0
+      scene.traverse((o) => {
+        if ((o as Mesh).isMesh) this.onModel?.(`${key}:${i++}`, o as Mesh)
+      })
+    })
+    tiles.addEventListener('dispose-model', ({ scene }: { scene: Object3D }) => {
+      if (scene.userData.nihonKey) this.onModelDisposed?.(scene.userData.nihonKey + ':')
+    })
 
     // Shift down along the local vertical by the geoid height.
     const clat = (city.bbox[1] + city.bbox[3]) / 2

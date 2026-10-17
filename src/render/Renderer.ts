@@ -206,11 +206,13 @@ export class RenderPipeline {
 
   setQuality(q: QualityTier): void {
     this.quality = q
-    const ratio = { low: 0.75, medium: 1, high: Math.min(window.devicePixelRatio, 1.5), ultra: Math.min(window.devicePixelRatio, 2) }[q]
+    const dpr = window.devicePixelRatio || 1
+    const ratio = { low: 0.6, medium: 1, high: Math.min(dpr, 1.5), ultra: Math.min(dpr, 2) }[q]
     this.renderer.setPixelRatio(ratio)
     this.clouds.qualityPreset = q === 'ultra' ? 'high' : q === 'high' ? 'medium' : 'low'
-    this.clouds.skipRendering = false
-    this.sun.shadow.mapSize.setScalar(q === 'low' ? 1024 : q === 'ultra' ? 4096 : 2048)
+    this.clouds.skipRendering = q === 'low'
+    this.renderer.shadowMap.enabled = q !== 'low'
+    this.sun.shadow.mapSize.setScalar(q === 'ultra' ? 4096 : 2048)
     this.sun.shadow.map?.dispose()
     this.sun.shadow.map = null
     this.resize()

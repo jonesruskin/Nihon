@@ -14,6 +14,7 @@ import csv, heapq, json, math, re, sys
 from collections import defaultdict
 
 n02_dir, wd_st_path, wd_ln_path, out_path = sys.argv[1:5]
+s12_path = sys.argv[5] if len(sys.argv) > 5 else None  # MLIT S12 passengers per station (optional)
 rails = json.load(open(f'{n02_dir}/N02-23_RailroadSection.geojson', encoding='utf-8'))['features']
 stations_raw = json.load(open(f'{n02_dir}/N02-23_Station.geojson', encoding='utf-8'))['features']
 
@@ -146,6 +147,20 @@ for f in stations_raw:
         dup['geom'] = dup['geom'] + cs
         continue
     stations.append({'ja': name, 'kana': kana, 'en': en, 'line': li, 'group': p['N02_005g'], 'lat': lat, 'lon': lon, 'geom': cs})
+
+# ---------------------------------------------------------------- ridership
+riders = {}
+if s12_path:
+    for f in json.load(open(s12_path, encoding='utf-8'))['features']:
+        p = f['properties']
+        # Daily passengers: the larger of 2019 (pre-pandemic) and 2022.
+        vals = [p.get('S12_041') or 0, p.get('S12_053') or 0]
+        key = (p['S12_002'], p['S12_003'], p['S12_001'])
+        riders[key] = riders.get(key, 0) + max(vals)
+raw_line = {v: k for k, v in line_ids.items()}
+for st in stations:
+    op, ln = raw_line[st['line']]
+    st['riders'] = riders.get((op, ln, st['ja']), 0)
 
 # ---------------------------------------------------------------- per-line graphs
 def qk(c):
@@ -289,12 +304,12 @@ out_st = []
 for i, s in enumerate(stations):
     if i in used:
         remap[i] = len(out_st)
-        out_st.append([s['ja'], s['kana'], s['en'], s['line'], int(s['group']), round(s['lat'] * Q), round(s['lon'] * Q)])
+        out_st.append([s['ja'], s['kana'], s['en'], s['line'], int(s['group']), round(s['lat'] * Q), round(s['lon'] * Q), s.get('riders', 0)])
 out_links = [[remap[a], remap[b], li, d, pi] for a, b, li, d, pi in links]
 out_lines = [[l['ja'], l['en'], l['op'], l['kind'], l['color']] for l in lines]
 
 json.dump({
-    'source': '国土数値情報 鉄道データ N02-23 (MLIT), Wikidata (CC0)',
+    'source': '国土数値情報 鉄道データ N02-23 / 駅別乗降客数 S12-23 (MLIT), Wikidata (CC0)',
     'lines': out_lines,
     'stations': out_st,
     'links': out_links,
@@ -304,4 +319,5 @@ json.dump({
 print('lines', len(out_lines), 'stations', len(out_st), '/', len(stations), 'links', len(out_links),
       'pts', sum(len(p) for p in paths) // 2,
       'en', sum(1 for s in out_st if s[2]), 'kana', sum(1 for s in out_st if s[1]),
-      'colored', sum(1 for l in out_lines if l[4]), 'line_en', sum(1 for l in out_lines if l[1]))
+      'colored', sum(1 for l in out_lines if l[4]), 'line_en', sum(1 for l in out_lines if l[1]),
+      'riders', sum(1 for s in out_st if s[7]))

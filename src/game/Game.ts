@@ -24,6 +24,9 @@ import { Traffic, type AICar } from '../vehicles/Traffic'
 import { MapView } from '../ui/MapView'
 import type { Destination } from '../data/places'
 import { RailRide } from '../transit/RailRide'
+import { Crowd } from '../people/Crowd'
+import { PopulationGrid, pedestriansPerHectare } from '../people/density'
+import { DESTINATIONS } from '../data/places'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
 
@@ -92,6 +95,12 @@ export class Game {
   readonly map: MapView
   readonly rail: RailRide
   readonly stationPanel: StationPanel
+  readonly crowd = new Crowd()
+  private population: PopulationGrid | null = null
+  private crowdTimer = 0
+  private crowdTarget = 0
+  /** Pedestrians per hectare right here, right now (debug/HUD). */
+  pedDensity = 0
   private nearStation: Station | null = null
   private stationTimer = 0
   private trainBaseYaw: number | null = null
@@ -128,7 +137,7 @@ export class Game {
     this.player = new Player(this.physics)
     this.rig = new CameraRig(this.pipeline.camera, this.physics)
     const scene = this.pipeline.scene
-    scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root, this.traffic.root)
+    scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root, this.traffic.root, this.crowd.root)
     this.map = new MapView(ui, {
       travel: (lat, lon, heading, dest) => void this.travelTo(lat, lon, heading, dest),
       setDestination: (lat, lon, label) => {
@@ -179,6 +188,7 @@ export class Game {
     this.wireColliders()
     this.world.onRebase((delta) => {
       this.rail.snap.invalidate()
+      this.crowd.rebase(delta)
       this.pipeline.scene.updateMatrixWorld(true)
       this.physics.syncStatics()
       if (this.player.body) this.player.rebase(delta)
@@ -228,6 +238,10 @@ export class Game {
       this.physics.init(),
       this.characters.init(),
       this.rail.load().catch((e) => console.warn('rail network unavailable', e)),
+      this.crowd.init(Math.ceil(this.crowd.cap / 5)).catch((e) => console.warn('crowd unavailable', e)),
+      PopulationGrid.load()
+        .then((g) => (this.population = g))
+        .catch((e) => console.warn('population grid unavailable', e)),
     ])
     this.hud.setLoading(0.2, 'Reading the terrain (国土地理院)…')
     await this.terrain.prefetchAround(p.lat, p.lon, 300)
@@ -270,6 +284,9 @@ export class Game {
   applyQuality(q: QualityTier): void {
     this.pipeline.setQuality(q)
     if (this.rail) this.rail.maxAmbient = { low: 2, medium: 3, high: 5, ultra: 7 }[q]
+    const c = { low: [75, 70], medium: [100, 170], high: [120, 320], ultra: [150, 520] }[q]
+    this.crowd.maxRadius = this.crowd.radius = c[0]
+    this.crowd.cap = c[1]
     const t = {
       low: { far: 30_000, split: 1.3, near: 800, vfar: 1300, err: 48 },
       medium: { far: 60_000, split: 1.5, near: 1200, vfar: 2000, err: 32 },
@@ -491,6 +508,7 @@ export class Game {
       this.traffic.playerCar = this.mode === 'driving' && this.vehicles.current ? { pos: this.vehicles.current.position, length: this.vehicles.current.spec.length } : null
       this.traffic.update(dt, focus, this.clock.jst.hourFloat)
       this.rail.updateAmbient(dt, cam.position, this.clock.jst.hourFloat)
+      this.updateCrowd(dt, this.mode === 'onfoot' ? this.player.feet : cam.position)
     }
     cam.updateMatrixWorld()
     this.terrain.update(cam.position, t)
@@ -510,6 +528,35 @@ export class Game {
   }
 
   private lookIdle = 0
+
+  /** Real-data crowd density around the player → number of pedestrians. */
+  private updateCrowd(dt: number, at: Vector3): void {
+    if (!this.crowd.ready) return
+    this.crowd.maybeRebuild(dt, this.vector.readyTiles)
+    this.crowdTimer -= dt
+    if (this.crowdTimer <= 0) {
+      this.crowdTimer = 2
+      const g = this.world.geodeticFromWorld(at)
+      const j = this.clock.jst
+      const stations = this.rail.net ? this.rail.net.nearby(g.lat, g.lon, 900).map((n) => ({ riders: n.station.riders, distance: n.d })) : []
+      let hotspot = 0
+      for (const d of DESTINATIONS) {
+        const dist = Math.hypot((d.lat - g.lat) * 111000, (d.lon - g.lon) * 91000)
+        if (dist < 600) hotspot = Math.max(hotspot, d.tags.includes('iconic') ? 1 : d.tags.some((t) => ['temple', 'shrine', 'castle', 'old town'].includes(t)) ? 0.4 : 0)
+      }
+      this.pedDensity = pedestriansPerHectare({
+        residentsPerKm2: this.population?.densityAt(g.lat, g.lon) ?? 0,
+        shopsWithin300m: this.crowd.shopsNear(at, 300),
+        stations,
+        hour: j.hourFloat,
+        weekend: j.weekday === 0 || j.weekday === 6,
+        rain: 0,
+        hotspot,
+      })
+    }
+    this.crowd.update(dt, at, this.pedDensity, this.elapsed)
+    this.crowdTarget = this.crowd.target
+  }
 
   private stationModes(st: Station): string {
     const net = this.rail.net!
@@ -747,6 +794,7 @@ export class Game {
     if (this.vehicles.current) this.vehicles.exit()
     for (const c of [...this.traffic.cars]) this.traffic.remove(c)
     this.rail.clearAmbient()
+    this.crowd.clear()
     for (const v of [...this.vehicles.vehicles]) v.dispose()
     this.vehicles.vehicles.length = 0
     this.player.enabled = false
@@ -889,6 +937,9 @@ export class Game {
       vectorPending: this.vector.pending,
       physics: this.physics.staticCount,
       settled: Number(this.mode !== 'loading' && this.elapsed > 8 && pendingRequests() === 0),
+      peds: this.crowd.peds.length,
+      pedTarget: Math.round(this.crowdTarget),
+      pedPerHa: Math.round(this.pedDensity * 10) / 10,
     }
   }
 

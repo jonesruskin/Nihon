@@ -254,8 +254,7 @@ export class RenderPipeline {
     const ratio = { low: 0.6, medium: 1, high: Math.min(dpr, 1.5), ultra: Math.min(dpr, 2) }[q]
     this.renderer.setPixelRatio(ratio)
     this.clouds.qualityPreset = q === 'ultra' ? 'high' : q === 'high' ? 'medium' : 'low'
-    this.clouds.skipRendering = q === 'low'
-    this.linkCloudBuffers()
+    this.updateCloudSkip()
     this.renderer.shadowMap.enabled = q !== 'low'
     this.lights.setPoolSize({ low: 8, medium: 16, high: 24, ultra: 32 }[q])
     this.sun.shadow.mapSize.setScalar(q === 'ultra' ? 4096 : 2048)
@@ -275,6 +274,16 @@ export class RenderPipeline {
   }
 
   private noClouds = new URLSearchParams(location.search).has('noclouds')
+
+  /** Clouds are skipped on the low tier, and after dark: the cloud march
+   *  produces NaNs once the sun is below the horizon. */
+  private updateCloudSkip(): void {
+    const skip = this.quality === 'low' || (this.textures !== null && this.sunElevation() < -2)
+    if (this.clouds.skipRendering !== skip) {
+      this.clouds.skipRendering = skip
+      this.linkCloudBuffers()
+    }
+  }
 
   resize(): void {
     const w = window.innerWidth
@@ -341,6 +350,7 @@ export class RenderPipeline {
     this.bloom.intensity = 0.55 - 0.25 * this.night
     this.renderer.toneMappingExposure = this.exposure
 
+    this.updateCloudSkip()
     this.lights.update(dt, this.camera.position, this.night)
     // Sky glow in scene radiance (exposure is applied later): sodium/LED mix,
     // ~3x brighter when low cloud reflects the city back down.

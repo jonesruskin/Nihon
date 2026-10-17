@@ -1,0 +1,72 @@
+[
+ {
+  "name": "player_m",
+  "gender": "m",
+  "age": 0.5
+ },
+ {
+  "name": "player_f",
+  "gender": "f",
+  "age": 0.48
+ },
+ {
+  "name": "salaryman_a",
+  "gender": "m",
+  "age": 0.56
+ },
+ {
+  "name": "salaryman_b",
+  "gender": "m",
+  "age": 0.66
+ },
+ {
+  "name": "salaryman_c",
+  "gender": "m",
+  "age": 0.5
+ },
+ {
+  "name": "office_f",
+  "gender": "f",
+  "age": 0.52
+ },
+ {
+  "name": "young_f",
+  "gender": "f",
+  "age": 0.42
+ },
+ {
+  "name": "young_m",
+  "gender": "m",
+  "age": 0.44
+ },
+ {
+  "name": "student_f",
+  "gender": "f",
+  "age": 0.36
+ },
+ {
+  "name": "casual_m",
+  "gender": "m",
+  "age": 0.6
+ },
+ {
+  "name": "elder_m",
+  "gender": "m",
+  "age": 0.86
+ },
+ {
+  "name": "elder_f",
+  "gender": "f",
+  "age": 0.86
+ },
+ {
+  "name": "tourist_m",
+  "gender": "m",
+  "age": 0.5
+ },
+ {
+  "name": "tourist_f",
+  "gender": "f",
+  "age": 0.47
+ }
+]

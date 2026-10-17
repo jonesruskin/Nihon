@@ -24,6 +24,7 @@ export interface Station {
   group: number
   lat: number
   lon: number
+  riders: number // daily passengers (MLIT S12)
   links: number[]
 }
 
@@ -139,9 +140,9 @@ export class RailNetwork {
     return new RailNetwork(data)
   }
 
-  constructor(data: { lines: [string, string, string, LineKind, string][]; stations: [string, string, string, number, number, number, number][]; links: [number, number, number, number, number][]; paths: number[][] }) {
+  constructor(data: { lines: [string, string, string, LineKind, string][]; stations: [string, string, string, number, number, number, number, number?][]; links: [number, number, number, number, number][]; paths: number[][] }) {
     this.lines = data.lines.map(([ja, en, operator, kind, color], id) => ({ id, ja, en, operator, kind, color: color || defaultColor(kind) }))
-    this.stations = data.stations.map(([ja, kana, en, line, group, la, lo], id) => ({ id, ja, kana, en, line, group, lat: la / 1e5, lon: lo / 1e5, links: [] }))
+    this.stations = data.stations.map(([ja, kana, en, line, group, la, lo, riders], id) => ({ id, ja, kana, en, line, group, lat: la / 1e5, lon: lo / 1e5, riders: riders ?? 0, links: [] }))
     this.links = data.links.map(([a, b, line, length, path], id) => ({ id, a, b, line, length, path }))
     this.paths = data.paths
     for (const l of this.links) {

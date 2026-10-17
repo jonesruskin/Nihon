@@ -139,6 +139,78 @@ export class RailRide {
     this.headlight.intensity = 0
   }
 
+  // ------------------------------------------------------------ ambient trains
+
+  private ambient: TrainRun[] = []
+  private ambientTimer = 0
+  maxAmbient = 4
+
+  /**
+   * Trains running past on the lines around you, at a frequency that follows
+   * the timetable rhythm: rush hours busy, none between ~1:00 and 5:00.
+   */
+  updateAmbient(dt: number, cam: Vector3, hour: number): void {
+    const net = this.net
+    if (!net) return
+    this.snap.update(dt, this.host.vector.readyTiles)
+    for (const r of [...this.ambient]) {
+      r.update(dt)
+      const p = r.cars[0].group.position
+      if (r.state === 'arrived' || p.distanceTo(cam) > 4000) {
+        r.dispose()
+        this.ambient.splice(this.ambient.indexOf(r), 1)
+      }
+    }
+    this.ambientTimer -= dt
+    if (this.ambientTimer > 0) return
+    this.ambientTimer = 2.5
+    const tod = hour < 1 ? 0.3 : hour < 5 ? 0 : hour < 7 ? 0.6 : hour < 10 ? 1 : hour < 17 ? 0.75 : hour < 20 ? 1 : 0.6
+    if (this.ambient.length >= Math.round(this.maxAmbient * tod)) return
+    const g = this.host.world.geodeticFromWorld(cam)
+    const near = net.nearby(g.lat, g.lon, 2600).filter((n) => {
+      const k = net.lines[n.station.line].kind
+      return n.d > 900 && k !== 'metro' && k !== 'cable' && k !== 'agt'
+    })
+    if (!near.length) return
+    const start = near[Math.floor(Math.random() * near.length)].station
+    const here = { lat: g.lat, lon: g.lon }
+    const dist = (id: number) => {
+      const s = net.stations[id]
+      return Math.hypot((s.lat - here.lat) * 111000, (s.lon - here.lon) * 91000)
+    }
+    // Head toward the player, then carry on through.
+    const stations = [start.id]
+    const links: number[] = []
+    let total = 0
+    let passed = false
+    while (links.length < 7 && total < 6000) {
+      const cur = stations[stations.length - 1]
+      const prev = stations.length > 1 ? stations[stations.length - 2] : -1
+      const opts = net.stations[cur].links.filter((l) => net.links[l].line === start.line && net.other(l, cur) !== prev)
+      if (!opts.length) break
+      let pick = opts[0]
+      if (!passed) {
+        pick = opts.reduce((a, b) => (dist(net.other(a, cur)) < dist(net.other(b, cur)) ? a : b))
+        if (dist(net.other(pick, cur)) > dist(cur)) passed = true
+      } else pick = opts[Math.floor(Math.random() * opts.length)]
+      links.push(pick)
+      stations.push(net.other(pick, cur))
+      total += net.links[pick].length
+      if (passed && total > 3500) break
+    }
+    if (links.length < 2) return
+    const run = new TrainRun(net, net.lines[start.line], links, stations, this.host.world, this.host.terrain, this.snap)
+    run.dwell = Math.random() * 15
+    run.update(0)
+    this.root.add(run.group)
+    this.ambient.push(run)
+  }
+
+  clearAmbient(): void {
+    for (const r of this.ambient) r.dispose()
+    this.ambient.length = 0
+  }
+
   /** Programmatic skip (tests, UI buttons). */
   requestSkip(all: boolean): void {
     this.skipRequest = all ? 'all' : 'next'

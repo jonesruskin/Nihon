@@ -38,13 +38,14 @@ import {
   createPoleModel,
   createSignalModel,
   createStreetLightModel,
+  createMastModel,
   createTreeModels,
   createVendingModel,
   type PropModel,
 } from '../props/models'
 
 /** Max draw distance (m) per prop type. */
-const PROP_RANGE: Record<string, number> = { pole: 450, light: 600, vending: 220, signal: 500, pillar: 3000, tree: 900, wires: 350 }
+const PROP_RANGE: Record<string, number> = { pole: 450, light: 600, vending: 220, signal: 500, pillar: 3000, tree: 900, wires: 350, mast: 550 }
 
 const TILE_URL = (t: TileId) => `https://tiles.openfreemap.org/planet/20261011_080001_pt/${t.z}/${t.x}/${t.y}.pbf`
 const Z = 14
@@ -111,6 +112,7 @@ export class VectorManager {
     this.props = {
       pole: createPoleModel(),
       light: createStreetLightModel(),
+      mast: createMastModel(),
       vending: createVendingModel(),
       pillar: createPillarModel(),
       signal: createSignalModel(),
@@ -334,6 +336,7 @@ export class VectorManager {
     instance('vending', this.props.vending, I.vending, () => true, () => new Vector3(1, 1, 1))
     instance('signal', this.props.signal, I.signal, () => true, () => new Vector3(1, 1, 1))
     instance('pillar', this.props.pillar, I.pillar, () => true, (s, e) => new Vector3(e, s, 1))
+    if (I.mast) instance('mast', this.props.mast, I.mast, () => true, (s) => new Vector3(1, s / 7, 1))
     this.trees.forEach((model, type) => instance('tree', model, I.tree, (e) => Math.round(e) === type, (s) => new Vector3(s, s, s)))
 
     if (this.lights) {

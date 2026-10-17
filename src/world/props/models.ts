@@ -250,6 +250,20 @@ export function createPoleModel(): PropModel {
   return { geometry: assemble(parts), materials: [vc({ roughness: 0.85 })], castShadow: true }
 }
 
+/** Catenary mast (電柱/架線柱): galvanised steel pole, cantilever toward +z, insulators. */
+export function createMastModel(): PropModel {
+  const steel = 0x8f9396
+  const parts: BufferGeometry[] = [
+    colored(at(new BoxGeometry(0.26, 7, 0.22), 0, 3.5, 0), steel),
+    colored(at(new BoxGeometry(0.08, 0.08, 3.1), 0, 6.45, 1.45), steel), // upper tie
+    colored(at(new BoxGeometry(0.07, 0.07, 3.0), 0, 5.6, 1.4, -0.3, 0, 0), steel), // diagonal brace
+    colored(at(new CylinderGeometry(0.06, 0.06, 0.35, 6), 0, 6.2, 2.7), 0x6b4a3a), // insulator
+    colored(at(new BoxGeometry(0.05, 0.9, 0.05), 0, 5.75, 2.7), steel), // dropper to contact wire
+    colored(at(new BoxGeometry(0.4, 0.3, 0.3), 0, 0.15, 0), 0x777a7c), // footing
+  ]
+  return { geometry: assemble(parts), materials: [vc({ roughness: 0.55, metalness: 0.5 })], castShadow: true }
+}
+
 export function createStreetLightModel(): PropModel {
   const parts: BufferGeometry[] = [
     colored(at(new CylinderGeometry(0.07, 0.11, 8, 8), 0, 4, 0), 0x8a8d90),

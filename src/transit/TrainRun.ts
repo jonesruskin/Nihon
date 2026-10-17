@@ -216,6 +216,8 @@ export class TrainRun {
     const p = this.base(ahead, this.tmpA)
     const q = this.base(ahead + 4, this.tmpB)
     const dir = this.tmpD.subVectors(q, p).normalize()
+    // Japan runs on the left: start on the left-hand track of a double line.
+    if (!this.profS.length && this.offset.lengthSq() === 0) this.offset.set(dir.z, 0, -dir.x).multiplyScalar(1.9)
     const hit = this.snap.query(p, dir, this.offset)
     let rel: number
     const loaded = this.snap.hasDataNear(p)

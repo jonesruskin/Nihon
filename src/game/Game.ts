@@ -269,6 +269,7 @@ export class Game {
   /** Rendering + streaming budget per quality tier. */
   applyQuality(q: QualityTier): void {
     this.pipeline.setQuality(q)
+    if (this.rail) this.rail.maxAmbient = { low: 2, medium: 3, high: 5, ultra: 7 }[q]
     const t = {
       low: { far: 30_000, split: 1.3, near: 800, vfar: 1300, err: 48 },
       medium: { far: 60_000, split: 1.5, near: 1200, vfar: 2000, err: 32 },
@@ -431,7 +432,7 @@ export class Game {
           this.nearStation = this.rail.stationNear(g.lat, g.lon)
         }
         const st = this.nearStation
-        this.hud.setPrompt(st ? `<kbd>E</kbd>Enter <b>${st.ja}駅</b> <span style="opacity:.75">${st.en ? st.en + ' Station' : ''} · trains, subway, Shinkansen</span>` : null)
+        this.hud.setPrompt(st ? `<kbd>E</kbd>Enter <b>${st.ja}駅</b> <span style="opacity:.75">${st.en ? st.en + ' Station' : ''} · ${this.stationModes(st)}</span>` : null)
         if (st && input.hit('KeyE')) {
           document.exitPointerLock?.()
           this.stationPanel.show(st)
@@ -489,6 +490,7 @@ export class Game {
       this.traffic.playerPos = this.mode === 'onfoot' ? this.player.feet : null
       this.traffic.playerCar = this.mode === 'driving' && this.vehicles.current ? { pos: this.vehicles.current.position, length: this.vehicles.current.spec.length } : null
       this.traffic.update(dt, focus, this.clock.jst.hourFloat)
+      this.rail.updateAmbient(dt, cam.position, this.clock.jst.hourFloat)
     }
     cam.updateMatrixWorld()
     this.terrain.update(cam.position, t)
@@ -508,6 +510,20 @@ export class Game {
   }
 
   private lookIdle = 0
+
+  private stationModes(st: Station): string {
+    const net = this.rail.net!
+    const kinds = new Set(net.complex(st.id).map((c) => net.lines[c.line].kind))
+    const names: string[] = []
+    if (kinds.has('shinkansen')) names.push('Shinkansen')
+    if (kinds.has('jr')) names.push('JR')
+    if (kinds.has('metro')) names.push('subway')
+    if (kinds.has('private')) names.push('private railway')
+    if (kinds.has('tram')) names.push('tram')
+    if (kinds.has('monorail') || kinds.has('agt')) names.push('monorail')
+    const n = new Set(net.complex(st.id).map((c) => c.line)).size
+    return `${names.join(', ')} · ${n} line${n > 1 ? 's' : ''}`
+  }
 
   private boardTrain(route: import('../transit/RailNetwork').Route): void {
     // Tap in: Japanese gates need at least the minimum fare on the card.
@@ -730,6 +746,7 @@ export class Game {
     this.hud.setSpeed(null)
     if (this.vehicles.current) this.vehicles.exit()
     for (const c of [...this.traffic.cars]) this.traffic.remove(c)
+    this.rail.clearAmbient()
     for (const v of [...this.vehicles.vehicles]) v.dispose()
     this.vehicles.vehicles.length = 0
     this.player.enabled = false

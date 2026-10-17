@@ -129,6 +129,7 @@ export function buildTile(req: BuildRequest): TileBuild {
     vending: [],
     pillar: [],
     signal: [],
+    mast: [],
   }
   const wires: number[] = []
   const pois: Poi[] = []
@@ -365,6 +366,42 @@ export function buildTile(req: BuildRequest): TileBuild {
           if (pv) rails.quadUp(pv[0], vt1, vt2, pv[1])
           pv = [vt1, vt2]
         }
+      }
+    }
+
+    // Overhead catenary (架線): masts every ~50 m with a cantilever over the
+    // track, contact wire at 5.1 m and the messenger wire above it.
+    if (isRail && req.detail >= 1 && total > 30) {
+      const masts = sampleAlong(pts, 50, 10)
+      let prevC: number[] | null = null
+      let prevM: number[] | null = null
+      for (const sm of masts) {
+        const i = Math.min(pts.length - 1, Math.round((sm.s / total) * (pts.length - 1)))
+        const rh = h[i] + 0.17
+        const nx = sm.t[1]
+        const ny = -sm.t[0]
+        const mx = sm.p[0] + nx * 2.7
+        const my = sm.p[1] + ny * 2.7
+        const base = V(mx, my, Math.min(rh - 0.2, bridge ? rh - 0.2 : ground(mx, my)))
+        const c = V(sm.p[0], sm.p[1], rh + 5.1)
+        const m = V(sm.p[0], sm.p[1], rh + 6.15)
+        const yaw = Math.atan2(c[0] - base[0], c[2] - base[2])
+        instances.mast.push(base[0], base[1], base[2], yaw, rh + 6.6 - (base[1] + drop(mx, my)), 0)
+        if (prevC && prevM) {
+          wires.push(...prevC, ...c)
+          const SEG = 4
+          for (let k = 0; k < SEG; k++) {
+            const t0 = k / SEG
+            const t1 = (k + 1) / SEG
+            const sag = (t: number) => 4 * t * (1 - t) * 0.5
+            wires.push(
+              prevM[0] + (m[0] - prevM[0]) * t0, prevM[1] + (m[1] - prevM[1]) * t0 - sag(t0), prevM[2] + (m[2] - prevM[2]) * t0,
+              prevM[0] + (m[0] - prevM[0]) * t1, prevM[1] + (m[1] - prevM[1]) * t1 - sag(t1), prevM[2] + (m[2] - prevM[2]) * t1,
+            )
+          }
+        }
+        prevC = c
+        prevM = m
       }
     }
 

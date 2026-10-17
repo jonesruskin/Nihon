@@ -193,6 +193,13 @@ export class PlateauManager {
    */
   private prepareModel(scene: Object3D): void {
     scene.updateMatrixWorld(true)
+    // Official per-building attributes (用途, 階数, 構造) from the batch table.
+    type BT = { getPropertyArray(k: string): unknown[] | null; getKeys(): string[] }
+    const bt = (scene as unknown as { batchTable?: BT }).batchTable
+    const usage = (bt?.getPropertyArray('bldg:usage') ?? []) as Array<string | null>
+    const storeys = (bt?.getPropertyArray('bldg:storeysAboveGround') ?? []) as Array<number | null>
+    const fire = (bt?.getPropertyArray('uro:BuildingDetailAttribute_uro:fireproofStructureType') ?? []) as Array<string | null>
+    const attrs = (bt?.getKeys().includes('attributes') ? bt.getPropertyArray('attributes') : []) as Array<Record<string, unknown> | null>
     const v = new Vector3()
     const centre = new Vector3()
     scene.traverse((o) => {
@@ -229,6 +236,7 @@ export class PlateauManager {
       }
       const seedOf = new Map<number, number>()
       const kindOf = new Map<number, number>()
+      const fhOf = new Map<number, number>()
       for (const [id, a] of sum) {
         const x = Math.round(a[0] / a[3])
         const y = Math.round(a[1] / a[3])
@@ -237,23 +245,37 @@ export class PlateauManager {
         const seed = r - Math.floor(r)
         seedOf.set(id, seed)
         const height = (maxH.get(id) ?? 0) - (minH.get(id) ?? 0)
+        const u = usage[id] ?? ''
+        const detailed = String(((attrs[id]?.['uro:BuildingDetailAttribute'] as Array<Record<string, unknown>> | undefined)?.[0]?.['uro:detailedUsage']) ?? '')
+        const st = storeys[id] ?? 0
         let kind: number = BUILDING_KIND.generic
-        if (height > 70 && seed > 0.25) kind = BUILDING_KIND.glass
+        if (detailed.includes('宗教')) kind = BUILDING_KIND.wood
+        else if (u === '住宅' || u === '戸建住宅' || (u.includes('併用住宅') && !u.includes('共同'))) kind = height < 13 ? BUILDING_KIND.house : BUILDING_KIND.apartment
+        else if (u.includes('共同住宅')) kind = BUILDING_KIND.apartment
+        else if (u.includes('商業') || u.includes('宿泊')) kind = height > 70 && seed > 0.3 ? BUILDING_KIND.glass : BUILDING_KIND.commercial
+        else if (u.includes('業務') || u.includes('官公庁')) kind = height > 50 && seed > 0.25 ? BUILDING_KIND.glass : BUILDING_KIND.office
+        else if (u.includes('工場') || u.includes('倉庫') || u.includes('運輸')) kind = BUILDING_KIND.industrial
+        else if (height > 70 && seed > 0.25) kind = BUILDING_KIND.glass
         else if (height > 12) kind = BUILDING_KIND.office
         else if (height < 9) kind = BUILDING_KIND.house
+        if (kind === BUILDING_KIND.house && (fire[id] ?? '') === '耐火' && height > 9) kind = BUILDING_KIND.apartment
         kindOf.set(id, kind)
+        fhOf.set(id, st > 0 && st < 200 ? Math.min(5.5, Math.max(2.6, height / st)) : 0)
       }
       const bh = new Float32Array(count)
       const seed = new Float32Array(count)
       const kind = new Float32Array(count)
+      const fh = new Float32Array(count)
       for (let i = 0; i < count; i++) {
         bh[i] = heights[i] - (minH.get(ids[i]) ?? 0)
         seed[i] = seedOf.get(ids[i]) ?? 0
         kind[i] = kindOf.get(ids[i]) ?? 0
+        fh[i] = fhOf.get(ids[i]) ?? 0
       }
       g.setAttribute('bh', new BufferAttribute(bh, 1))
       g.setAttribute('seed', new BufferAttribute(seed, 1))
       g.setAttribute('kind', new BufferAttribute(kind, 1))
+      g.setAttribute('fh', new BufferAttribute(fh, 1))
       if (!g.getAttribute('normal')) g.computeVertexNormals()
       const old = Array.isArray(m.material) ? m.material : [m.material]
       old.forEach((x) => x.dispose())

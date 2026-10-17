@@ -264,7 +264,7 @@ export function createStreetLightModel(): PropModel {
     s.uniforms.uNight = buildingUniforms.uNight
     s.fragmentShader = s.fragmentShader
       .replace('#include <common>', '#include <common>\nuniform float uNight;')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance = vec3(1.0, 0.86, 0.65) * 40.0 * uNight;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance = vec3(1.0, 0.93, 0.84) * 6.0 * uNight;')
   }
   return { geometry: assemble(parts), materials: [vc({ roughness: 0.5, metalness: 0.6 }), lampMat], castShadow: true }
 }
@@ -308,7 +308,7 @@ export function createVendingModel(): PropModel {
     s.uniforms.uNight = buildingUniforms.uNight
     s.fragmentShader = s.fragmentShader
       .replace('#include <common>', '#include <common>\nuniform float uNight;')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * (0.6 + 6.0 * uNight);')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * (0.12 + 0.4 * uNight);')
   }
   return { geometry: assemble([body, front]), materials: [vc({ roughness: 0.4, metalness: 0.1 }), frontMat], castShadow: true }
 }

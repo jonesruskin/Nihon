@@ -81,6 +81,13 @@ export class Input {
     return h
   }
 
+  /** Like hit(), but works while gameplay input is disabled (menus). */
+  hitAlways(code: string): boolean {
+    const h = this.pressed.has(code)
+    this.pressed.delete(code)
+    return h
+  }
+
   /** Simulate a key for tests / UI buttons. */
   press(code: string, hold = false): void {
     this.pressed.add(code)

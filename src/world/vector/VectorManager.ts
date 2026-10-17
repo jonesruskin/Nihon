@@ -32,6 +32,7 @@ import {
   createWireMaterial,
 } from '../../render/materials/street'
 import { createWaterMaterial } from '../../render/water'
+import { LAMP, type NightLights } from '../../render/NightLights'
 import {
   createPillarModel,
   createPoleModel,
@@ -74,6 +75,8 @@ export class VectorManager {
   private tmp = new Vector3()
   nearRadius = 1500
   farRadius = 2600
+  /** Night light pool; sources are registered per tile. */
+  lights: NightLights | null = null
   /** Called whenever a tile's build becomes available (traffic, crowds, culture). */
   onTile: ((t: { id: TileId; build: TileBuild; group: Group }) => void) | null = null
   onTileRemoved: ((key: string) => void) | null = null
@@ -333,6 +336,20 @@ export class VectorManager {
     instance('pillar', this.props.pillar, I.pillar, () => true, (s, e) => new Vector3(e, s, 1))
     this.trees.forEach((model, type) => instance('tree', model, I.tree, (e) => Math.round(e) === type, (s) => new Vector3(s, s, s)))
 
+    if (this.lights) {
+      // Light sources for the night pool: lamp heads, pole LEDs, vending machines.
+      const L: number[] = []
+      for (let i = 0; i < I.light.length; i += 6) {
+        const a = I.light[i + 3]
+        L.push(I.light[i] + 2.05 * Math.sin(a), I.light[i + 1] + 8.0, I.light[i + 2] + 2.05 * Math.cos(a), a, LAMP.street)
+      }
+      for (let i = 0; i < I.pole.length; i += 6) {
+        if (I.pole[i + 5] < 0.3) L.push(I.pole[i], I.pole[i + 1] + 5.2, I.pole[i + 2], 0, LAMP.pole)
+      }
+      for (let i = 0; i < I.vending.length; i += 6) L.push(I.vending[i], I.vending[i + 1], I.vending[i + 2], I.vending[i + 3], LAMP.vending)
+      this.lights.register(group, new Float32Array(L))
+    }
+
     const c = b.anchor
     this.world.anchor(group, anchorMatrix(c.lat, c.lon, 0))
     this.root.add(group)
@@ -340,6 +357,7 @@ export class VectorManager {
   }
 
   private disposeGroup(group: Group): void {
+    this.lights?.unregister(group)
     this.world.unanchor(group)
     this.root.remove(group)
     group.traverse((o) => {

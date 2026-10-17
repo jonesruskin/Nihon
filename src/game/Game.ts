@@ -2,7 +2,7 @@
 // it in around the player, and runs the frame loop.
 import { Raycaster, Vector3, type Mesh } from 'three'
 import { WorldFrame } from '../core/frame'
-import { GameClock } from '../core/clock'
+import { GameClock, fromJst, jstParts } from '../core/clock'
 import { pendingRequests } from '../core/net'
 import { approxDistanceMeters } from '../core/geo'
 import { RenderPipeline, type QualityTier } from '../render/Renderer'
@@ -20,6 +20,9 @@ import { CameraRig } from '../player/CameraRig'
 import { CharacterLibrary, type Person } from '../people/CharacterLibrary'
 import { Hud } from '../ui/Hud'
 import { VehicleManager } from '../vehicles/VehicleManager'
+import { Traffic, type AICar } from '../vehicles/Traffic'
+import { MapView } from '../ui/MapView'
+import type { Destination } from '../data/places'
 
 export interface StartParams {
   lat: number
@@ -33,7 +36,18 @@ export interface StartParams {
   character: string
 }
 
-export type Mode = 'loading' | 'onfoot' | 'driving' | 'fly'
+export type Mode = 'loading' | 'onfoot' | 'driving' | 'passenger' | 'fly'
+
+/** `t` accepts an ISO date or a bare JST wall-clock time ("19:30") today. */
+function parseTime(t: string): Date | undefined {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(t)
+  if (m) {
+    const now = jstParts(new Date())
+    return fromJst(now.year, now.month, now.day, Number(m[1]), Number(m[2]))
+  }
+  const d = new Date(t)
+  return isNaN(d.getTime()) ? undefined : d
+}
 
 function readParams(): StartParams {
   const q = new URLSearchParams(location.search)
@@ -43,7 +57,7 @@ function readParams(): StartParams {
     // Default: the Shibuya Scramble Crossing.
     lat: num('lat', 35.65947),
     lon: num('lon', 139.70057),
-    date: q.has('t') ? new Date(q.get('t')!) : undefined,
+    date: q.has('t') ? parseTime(q.get('t')!) : undefined,
     heading: num('heading', 300),
     pitch: num('pitch', -5),
     altitude,
@@ -71,6 +85,13 @@ export class Game {
   readonly characters = new CharacterLibrary()
   readonly hud: Hud
   readonly vehicles: VehicleManager
+  readonly traffic: Traffic
+  readonly map: MapView
+  /** Money: cash and a Suica-style IC card. */
+  wallet = { cash: 30000, ic: 3000 }
+  private ride: { car: AICar; kind: 'taxi' | 'bus'; meterM: number; slowS: number; last: Vector3; fare: number } | null = null
+  private hailed: AICar | null = null
+  destination: { lat: number; lon: number; label: string } | null = null
   avatar: Person | null = null
   mode: Mode = 'loading'
   private last = performance.now()
@@ -91,19 +112,35 @@ export class Game {
     this.terrain = new TerrainManager(this.world)
     this.plateau = new PlateauManager(this.world, this.pipeline.camera, this.pipeline.renderer)
     this.vector = new VectorManager(this.world, this.terrain, this.plateau)
+    this.vector.lights = this.pipeline.lights
     this.colliders = new WorldColliders(this.physics)
     this.vehicles = new VehicleManager(this.physics, this.vector)
+    this.traffic = new Traffic(this.physics, this.vector)
     this.input = new Input(canvas)
     this.player = new Player(this.physics)
     this.rig = new CameraRig(this.pipeline.camera, this.physics)
     const scene = this.pipeline.scene
-    scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root)
+    scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root, this.traffic.root)
+    this.map = new MapView(ui, {
+      travel: (lat, lon, heading, dest) => void this.travelTo(lat, lon, heading, dest),
+      setDestination: (lat, lon, label) => {
+        this.destination = { lat, lon, label }
+        this.hud.toast(`Destination set: <b>${label}</b>${this.ride?.kind === 'taxi' ? ' — the driver nods.' : ''}`)
+      },
+      playerPos: () => {
+        const p = this.mode === 'onfoot' && this.player.body ? this.player.feet : this.pipeline.camera.position
+        const g = this.world.geodeticFromWorld(p)
+        return { lat: g.lat, lon: g.lon, heading: -this.rig.yaw }
+      },
+    })
     this.wireColliders()
     this.world.onRebase((delta) => {
       this.pipeline.scene.updateMatrixWorld(true)
       this.physics.syncStatics()
       if (this.player.body) this.player.rebase(delta)
       this.vehicles.rebase(delta)
+      this.traffic.rebase(delta)
+      this.pipeline.lights.invalidate()
       this.pipeline.camera.position.applyMatrix4(delta)
       this.rig.snap()
     })
@@ -195,14 +232,37 @@ export class Game {
     this.plateau.errorTarget = t.err
   }
 
+  /** Nearest point on a street or footpath (never inside a building). */
+  private nearestWalkable(at: Vector3, maxDist = 200): Vector3 | null {
+    let best: Vector3 | null = null
+    let bd = maxDist
+    const p = new Vector3()
+    for (const t of this.vector.readyTiles) {
+      t.group.updateWorldMatrix(true, false)
+      for (const path of t.build.paths) {
+        if (path.kind === 'rail' || path.bridge) continue
+        for (let i = 0; i < path.pts.length; i += 3) {
+          p.set(path.pts[i], path.pts[i + 1], path.pts[i + 2]).applyMatrix4(t.group.matrixWorld)
+          const d = Math.hypot(p.x - at.x, p.z - at.z)
+          if (d < bd) {
+            bd = d
+            best = p.clone()
+          }
+        }
+      }
+    }
+    return best
+  }
+
   private async spawnPlayer(lat: number, lon: number): Promise<void> {
     const ground = this.terrain.heightAt(lat, lon)
-    const at = this.world.worldFromGeodetic(lat, lon, ground)
+    let at = this.world.worldFromGeodetic(lat, lon, ground)
     this.pipeline.scene.updateMatrixWorld(true)
+    at = this.nearestWalkable(at) ?? at
     this.colliders.activateNow(at)
-    // Land on whatever is there (road, bridge, plaza), not inside a building.
-    const top = this.physics.groundBelow(at.x, at.y + 60, at.z, 120)
-    if (top !== null && top - ground < 15) at.y = top
+    // Land on the street surface (or bridge deck) right there.
+    const top = this.physics.groundBelow(at.x, at.y + 3, at.z, 10)
+    if (top !== null) at.y = top
     this.player.spawn(at.add(new Vector3(0, 0.05, 0)))
     this.player.heading = this.rig.yaw
     if (!this.avatar && this.characters.manifest.length) {
@@ -230,9 +290,11 @@ export class Game {
     this.hud.setHints(
       this.mode === 'fly'
         ? '<kbd>WASD</kbd>fly <kbd>Q/E</kbd>down/up <kbd>Shift</kbd>fast <kbd>G</kbd>land'
-        : this.mode === 'driving'
+        : this.mode === 'passenger'
+          ? `<kbd>M</kbd>map <kbd>V</kbd>${v} <kbd>E</kbd>get off`
+          : this.mode === 'driving'
           ? `<kbd>W/S</kbd>drive/brake <kbd>A/D</kbd>steer <kbd>Space</kbd>handbrake <kbd>E</kbd>get out <kbd>V</kbd>${v}`
-          : `<kbd>WASD</kbd>walk <kbd>Shift</kbd>run <kbd>Space</kbd>jump <kbd>E</kbd>use <kbd>V</kbd>${v} <kbd>F</kbd>fly`,
+          : `<kbd>WASD</kbd>walk <kbd>Shift</kbd>run <kbd>E</kbd>use <kbd>H</kbd>hail taxi <kbd>M</kbd>map <kbd>V</kbd>${v}`,
     )
   }
 
@@ -259,6 +321,11 @@ export class Game {
       this.rig.toggle()
       this.updateHints()
     }
+    if (input.hitAlways('KeyM') || (this.map.open && input.hitAlways('Escape'))) {
+      this.map.toggle()
+      if (this.map.open) document.exitPointerLock?.()
+    }
+    input.enabled = !this.map.open && this.mode !== 'loading'
     if (input.hit('KeyF') && this.mode === 'onfoot') {
       this.mode = 'fly'
       this.player.enabled = false
@@ -295,8 +362,19 @@ export class Game {
       })
       // Interactions
       const car = this.vehicles.nearestEnterable(feet)
-      this.hud.setPrompt(car ? `<kbd>E</kbd>Drive the ${car.spec.label} <span style="opacity:.7">${car.spec.labelJa}</span>` : null)
-      if (car && input.hit('KeyE')) this.enterVehicle(car)
+      const boardable = this.boardable(feet)
+      if (boardable) {
+        const taxi = boardable.role === 'taxi'
+        this.hud.setPrompt(taxi ? '<kbd>E</kbd>Get in the taxi <span style="opacity:.7">— the rear door opens by itself</span>' : `<kbd>E</kbd>Board the bus <span style="opacity:.7">¥210 · IC card</span>`)
+        if (input.hit('KeyE')) this.board(boardable)
+      } else {
+        this.hud.setPrompt(car ? `<kbd>E</kbd>Drive the ${car.spec.label} <span style="opacity:.7">${car.spec.labelJa}</span>` : null)
+        if (car && input.hit('KeyE')) this.enterVehicle(car)
+      }
+      if (input.hit('KeyH')) {
+        this.hailed = this.traffic.hailTaxi(feet)
+        this.hud.toast(this.hailed ? 'You raise your hand. A taxi showing <b>空車</b> (vacant) pulls over.' : 'No vacant taxi nearby — look for the red <b>空車</b> sign on major streets.')
+      }
       this.colliders.update(dt, feet)
       this.keepAboveGround(feet)
       this.vehicles.update(dt, feet)
@@ -331,20 +409,30 @@ export class Game {
         this.vehicles.update(dt, pos)
         this.maybeRebase(pos)
       }
+    } else if (this.mode === 'passenger' && this.ride) {
+      this.updateRide(dt, input)
     } else if (this.mode === 'fly') {
       this.updateFly(dt)
       this.maybeRebase(cam.position)
     }
 
+    if (this.mode === 'onfoot' || this.mode === 'driving' || this.mode === 'passenger') {
+      const focus = this.mode === 'driving' && this.vehicles.current ? this.vehicles.current.position : this.ride ? this.ride.car.pos : this.player.feet
+      this.traffic.playerPos = this.mode === 'onfoot' ? this.player.feet : null
+      this.traffic.playerCar = this.mode === 'driving' && this.vehicles.current ? { pos: this.vehicles.current.position, length: this.vehicles.current.spec.length } : null
+      this.traffic.update(dt, focus, this.clock.jst.hourFloat)
+    }
     cam.updateMatrixWorld()
     this.terrain.update(cam.position, t)
     this.plateau.update(cam.position)
     this.vector.update(cam.position, t)
     this.pipeline.setDate(this.clock.date)
     const focus = this.mode === 'onfoot' && this.player.body ? this.player.feet : cam.position
+    const night = nightFactorFromSun(this.pipeline.sunElevation())
+    this.pipeline.night = night
     this.pipeline.update(dt, focus)
     updateWater(this.elapsed)
-    buildingUniforms.uNight.value = nightFactorFromSun(this.pipeline.sunElevation())
+    buildingUniforms.uNight.value = night
     buildingUniforms.uTime.value = this.elapsed
     this.pipeline.render(dt)
     this.updateHud(dt)
@@ -352,6 +440,182 @@ export class Game {
   }
 
   private lookIdle = 0
+
+  /** A stopped bus or a hailed, stopped taxi right next to the player. */
+  private boardable(feet: Vector3): AICar | null {
+    for (const c of this.traffic.cars) {
+      if (c.v > 0.4) continue
+      const d = c.pos.distanceTo(feet)
+      if (c.role === 'taxi' && c === this.hailed && d < 5) return c
+      if (c.role === 'bus' && c.stopTimer > 0 && d < 7) return c
+    }
+    return null
+  }
+
+  private board(c: AICar): void {
+    const kind = c.role === 'taxi' ? 'taxi' : 'bus'
+    if (kind === 'bus') {
+      if (!this.pay(210, 'ic')) return
+      this.hud.toast('ピッ — ¥210 from your IC card. Buses in Tokyo charge a flat fare when you board at the front.')
+    } else {
+      c.vacant = false
+      c.hailed = false
+      this.hailed = null
+      this.hud.toast(this.destination ? `「<b>${this.destination.label}</b>までお願いします」— Please take me to ${this.destination.label}.` : 'The driver asks 「どちらまで？」 (Where to?) — open the map (<kbd>M</kbd>) and choose <b>Set destination</b>.', 7000)
+    }
+    c.passengerAboard = true
+    c.stopTimer = 0
+    this.ride = { car: c, kind, meterM: 0, slowS: 0, last: c.pos.clone(), fare: kind === 'taxi' ? 500 : 210 }
+    this.mode = 'passenger'
+    this.player.enabled = false
+    this.player.object.visible = false
+    this.player.body.setEnabled(false)
+    this.rig.mode = 'third'
+    this.rig.snap()
+    this.routeTimer = 0
+    this.updateHints()
+  }
+
+  private routeTimer = 0
+
+  private updateRide(dt: number, input: import('../player/Input').Input): void {
+    const r = this.ride!
+    const c = r.car
+    if (!this.traffic.cars.includes(c)) {
+      // The vehicle left the simulated area (e.g. data gap): end the ride.
+      this.leaveRide()
+      return
+    }
+    // Taximeter (Tokyo 2022): ¥500 for the first 1.096 km, ¥100 per 255 m
+    // after that, plus ¥100 per 95 s spent below 10 km/h.
+    const moved = c.pos.distanceTo(r.last)
+    r.last.copy(c.pos)
+    if (r.kind === 'taxi') {
+      r.meterM += moved
+      if (c.v < 2.8) r.slowS += dt
+      r.fare = 500 + Math.max(0, Math.ceil((r.meterM - 1096) / 255)) * 100 + Math.floor(r.slowS / 95) * 100
+      this.routeTimer -= dt
+      if (this.destination && this.routeTimer <= 0) {
+        this.routeTimer = 4
+        const goal = this.world.worldFromGeodetic(this.destination.lat, this.destination.lon, this.terrain.heightAt(this.destination.lat, this.destination.lon) || 0)
+        c.route = this.traffic.graph.route(c.lane.id, goal)
+        c.nextLane = -1
+        c.destination = goal
+        if (c.pos.distanceTo(goal) < 60) {
+          c.stopTimer = 1
+        }
+      }
+      this.hud.setSpeed(c.v * 3.6)
+      this.hud.setPrompt(
+        `<span style="opacity:.75">メーター</span> <b>¥${r.fare.toLocaleString()}</b>` +
+          (this.destination ? ` · <kbd>T</kbd>skip ride · <kbd>E</kbd>${c.v < 0.5 ? 'pay & get out' : 'stop here'}` : ' · <kbd>M</kbd>choose destination · <kbd>E</kbd>get out'),
+      )
+      if (input.hit('KeyT') && this.destination) {
+        // Skip ahead: pay a distance-based estimate and arrive.
+        const g = this.world.geodeticFromWorld(c.pos)
+        const km = Math.hypot((g.lat - this.destination.lat) * 111, (g.lon - this.destination.lon) * 91) * 1.3
+        const fare = r.fare + Math.ceil((km * 1000) / 255) * 100
+        if (this.pay(fare, 'cash')) {
+          const d = this.destination
+          this.leaveRide(true)
+          void this.travelTo(d.lat, d.lon, undefined, undefined, `Taxi ride · ¥${fare.toLocaleString()}`)
+        }
+        return
+      }
+      if (input.hit('KeyE')) {
+        if (c.v > 0.5) c.stopTimer = 3
+        else if (this.pay(r.fare, 'cash')) this.leaveRide()
+      }
+    } else {
+      this.hud.setSpeed(null)
+      this.hud.setPrompt(c.stopTimer > 0 ? '<kbd>E</kbd>Get off here <span style="opacity:.7">次は… (next stop)</span>' : '<span style="opacity:.8">Riding the bus — press the stop button (<kbd>E</kbd>) to get off at the next stop</span>')
+      if (input.hit('KeyE') && c.stopTimer > 0) this.leaveRide()
+    }
+    const pivot = c.pos.clone().add(new Vector3(0, c.spec.height * 0.85, 0))
+    this.rig.update(dt, { pivot, speed: c.v, stepHz: 0, distance: c.role === 'bus' ? 11 : 6.2, shoulder: 0 })
+    this.colliders.update(dt, c.pos)
+    this.maybeRebase(c.pos)
+  }
+
+  private leaveRide(silent = false): void {
+    const r = this.ride
+    if (!r) return
+    const c = r.car
+    c.passengerAboard = false
+    if (r.kind === 'taxi') {
+      c.vacant = true
+      c.route = []
+      c.destination = null
+    }
+    this.ride = null
+    this.hud.setPrompt(null)
+    this.hud.setSpeed(null)
+    if (!silent) {
+      // Step out on the kerb side (left in Japan).
+      const left = new Vector3(c.tan.z, 0, -c.tan.x).normalize()
+      const at = c.pos.clone().addScaledVector(left, c.spec.width / 2 + 0.9)
+      this.player.body.setEnabled(true)
+      const top = this.physics.groundBelow(at.x, at.y + 3, at.z, 8)
+      this.player.teleport(new Vector3(at.x, (top ?? at.y) + 0.05, at.z))
+      this.player.object.visible = true
+      this.player.enabled = true
+      this.mode = 'onfoot'
+      if (r.kind === 'taxi') this.hud.toast(`Paid <b>¥${r.fare.toLocaleString()}</b>. No tipping in Japan — a simple ありがとうございました is perfect.`)
+    }
+    this.updateHints()
+  }
+
+  /** Pay from cash or IC card; returns false if short. */
+  pay(yen: number, method: 'cash' | 'ic'): boolean {
+    if (method === 'ic' && this.wallet.ic >= yen) {
+      this.wallet.ic -= yen
+      return true
+    }
+    if (this.wallet.cash >= yen) {
+      this.wallet.cash -= yen
+      return true
+    }
+    this.hud.toast(`Not enough money (need ¥${yen.toLocaleString()}). Top up your IC card at a station machine or ATM at a konbini.`)
+    return false
+  }
+
+  /** Fast travel: re-anchor the world at a new place and stream it in. */
+  async travelTo(lat: number, lon: number, heading?: number, dest?: Destination, note?: string): Promise<void> {
+    this.mode = 'loading'
+    this.hud.showLoading(dest ? `Travelling to ${dest.kanji} · ${dest.en}` : note ?? 'Travelling…')
+    this.hud.setPrompt(null)
+    this.hud.setSpeed(null)
+    if (this.vehicles.current) this.vehicles.exit()
+    for (const c of [...this.traffic.cars]) this.traffic.remove(c)
+    for (const v of [...this.vehicles.vehicles]) v.dispose()
+    this.vehicles.vehicles.length = 0
+    this.player.enabled = false
+    this.world.rebase(lat, lon)
+    this.places = []
+    this.currentPlace = ''
+    await this.terrain.prefetchAround(lat, lon, 300).catch(() => {})
+    const ground = this.terrain.heightAt(lat, lon)
+    const cam = this.pipeline.camera
+    cam.position.copy(this.world.worldFromGeodetic(lat, lon, (Number.isNaN(ground) ? 0 : ground) + 1.7))
+    if (heading !== undefined) this.rig.yaw = (-heading * Math.PI) / 180
+    const t0 = performance.now()
+    while (performance.now() - t0 < 60_000) {
+      const terrainOk = this.terrain.isDetailedAt(lat, lon)
+      const vectorOk = this.vector.loadedCount > 0 && this.vector.pending === 0
+      this.hud.setLoading(0.2 + (terrainOk ? 0.4 : 0) + (vectorOk ? 0.3 : 0), !terrainOk ? 'Draping aerial photographs on the land…' : 'Laying streets and buildings…')
+      if (terrainOk && vectorOk) break
+      await new Promise((r) => setTimeout(r, 300))
+    }
+    this.player.body?.setEnabled(true)
+    await this.spawnPlayer(lat, lon)
+    this.hud.hideLoading()
+    if (dest) {
+      this.currentPlace = dest.kanji
+      this.hud.showPlace({ kanji: dest.kanji, reading: dest.reading, romaji: dest.romaji, meaning: dest.meaning, sub: `${dest.pref} · ${dest.en}` })
+      setTimeout(() => this.hud.toast(dest.blurb, 9000), 2500)
+    }
+    this.updateHints()
+  }
 
   private enterVehicle(car: import('../vehicles/Vehicle').Vehicle): void {
     this.vehicles.enter(car)

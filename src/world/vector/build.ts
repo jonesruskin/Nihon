@@ -569,6 +569,29 @@ export function buildTile(req: BuildRequest): TileBuild {
   }
   stats.trees = treeCount
 
+  // Commercial POIs (shops, restaurants, bars) inform building character.
+  const shopGrid = new Map<string, number>()
+  const plc0 = tile.layers.poi
+  if (plc0) {
+    const commercialCls = new Set(['shop', 'restaurant', 'cafe', 'fast_food', 'bar', 'pub', 'beer', 'clothing_store', 'grocery', 'alcohol_shop', 'mobile_phone', 'karaoke', 'cinema', 'bank'])
+    for (let i = 0; i < plc0.length; i++) {
+      const f = plc0.feature(i)
+      if (!commercialCls.has(String(f.properties.class))) continue
+      const g = f.loadGeometry()[0]?.[0]
+      if (!g) continue
+      const p = extentToLocal(plc0.extent, g.x, g.y)
+      const k = `${Math.floor(p[0] / 20)},${Math.floor(p[1] / 20)}`
+      shopGrid.set(k, (shopGrid.get(k) ?? 0) + 1)
+    }
+  }
+  const shopsNear = (x: number, y: number) => {
+    let n = 0
+    const cx = Math.floor(x / 20)
+    const cy = Math.floor(y / 20)
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) n += shopGrid.get(`${cx + dx},${cy + dy}`) ?? 0
+    return n
+  }
+
   // ------------------------------------------------------------- buildings
   const buildings = new MeshBuilder(false, { bh: 1, seed: 1, kind: 1 })
   const roofs = new MeshBuilder(true, { seed: 1 })
@@ -600,9 +623,12 @@ export function buildTile(req: BuildRequest): TileBuild {
         const gmax = Math.max(...gs)
         let kind = 0
         // OSM in Japan: untagged heights default to ~5 m; most are houses.
-        if (area < 220 && height <= 10) kind = 1
-        else if (area > 2500 && height < 16) kind = 4
+        const shops = shopsNear(c[0], c[1])
+        if (area < 220 && height <= 10) kind = shops >= 3 && height > 7 ? 7 : 1
+        else if (area > 2500 && height < 16) kind = shops >= 2 ? 7 : 4
         else if (height > 70) kind = seed > 0.35 ? 3 : 2
+        else if (shops >= 2) kind = 7
+        else if (height >= 9 && height < 50 && seed < 0.6) kind = 6
         else kind = 2
         let wallTop = gmax + Math.max(height, kind === 1 ? 6.2 : 3)
         const base = gmin - 1.2 + minH

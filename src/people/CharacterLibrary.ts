@@ -24,6 +24,7 @@ export interface CharacterInfo {
   file: string
   gender: 'm' | 'f'
   age: number
+  season?: 'summer' | 'winter' | 'any'
   clips: Record<string, number>
 }
 

@@ -159,7 +159,7 @@ function leafMaterial(kind: 'broad' | 'needle' | 'bamboo', tint: number, seasona
     metalness: 0,
   })
   m.name = `leaf-${seasonal}`
-  m.customProgramCacheKey = () => `leaf-${seasonal}-v1`
+  m.customProgramCacheKey = () => `leaf-${seasonal}-v3`
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, seasonUniforms, { uSnowLeaf: buildingUniforms.uSnow })
     shader.fragmentShader = shader.fragmentShader
@@ -167,6 +167,13 @@ function leafMaterial(kind: 'broad' | 'needle' | 'bamboo', tint: number, seasona
       .replace(
         '#include <map_fragment>',
         `#include <map_fragment>
+        // Alpha-tested foliage thins out in the smaller mips until distant
+        // trees are bare sticks; boost coverage with the mip level instead.
+        {
+          vec2 tdx = dFdx(vMapUv * 256.0), tdy = dFdy(vMapUv * 256.0);
+          float mip = max(0.0, 0.5 * log2(max(dot(tdx, tdx), dot(tdy, tdy))));
+          diffuseColor.a *= 1.0 + mip * 0.3;
+        }
         ${
           seasonal === 'sakura'
             ? 'diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.95, 0.78, 0.82) * (0.8 + 0.4 * diffuseColor.g), uBloom);'
@@ -176,7 +183,18 @@ function leafMaterial(kind: 'broad' | 'needle' | 'bamboo', tint: number, seasona
                 ? 'diffuseColor.rgb = mix(diffuseColor.rgb, mix(vec3(0.75, 0.18, 0.08), vec3(0.85, 0.5, 0.1), diffuseColor.g * 2.0), uAutumn * 0.85);'
                 : ''
         }
-        ${seasonal !== 'none' ? 'if (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898,78.233))) * 43758.5453) < uBare) discard;' : ''}
+        ${
+          seasonal !== 'none'
+            ? `// Winter: the crown thins to a stable mesh of grey-brown twigs
+        // (hashed in texture space so it doesn't shimmer as you move).
+        if (uBare > 0.0) {
+          vec2 cell = floor(vMapUv * 96.0);
+          float hsh = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
+          if (hsh < uBare * 0.72) discard;
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.13, 0.11) * (0.7 + 0.6 * hsh), uBare);
+        }`
+            : ''
+        }
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9), uSnowLeaf * 0.5 * step(0.0, vNormal.y));`,
       )
   }

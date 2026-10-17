@@ -8,7 +8,8 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "summer"
  },
  {
   "name": "player_f",
@@ -19,7 +20,8 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "summer"
  },
  {
   "name": "salaryman_a",
@@ -30,7 +32,8 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "any"
  },
  {
   "name": "salaryman_b",
@@ -41,7 +44,8 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "any"
  },
  {
   "name": "salaryman_c",
@@ -52,7 +56,8 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "any"
  },
  {
   "name": "office_f",
@@ -63,7 +68,8 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "any"
  },
  {
   "name": "young_f",
@@ -74,7 +80,8 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "summer"
  },
  {
   "name": "young_m",
@@ -85,7 +92,8 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "summer"
  },
  {
   "name": "student_f",
@@ -96,7 +104,8 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "summer"
  },
  {
   "name": "casual_m",
@@ -107,7 +116,8 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "any"
  },
  {
   "name": "elder_m",
@@ -118,7 +128,8 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "any"
  },
  {
   "name": "elder_f",
@@ -129,7 +140,8 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "summer"
  },
  {
   "name": "tourist_m",
@@ -140,13 +152,111 @@
    "walk": 1.1,
    "run": 0.7666666666666667,
    "idle": 0.1
-  }
+  },
+  "season": "summer"
  },
  {
   "name": "tourist_f",
   "file": "tourist_f.glb",
   "gender": "f",
   "age": 0.47,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "summer"
+ },
+ {
+  "name": "player_m_w",
+  "file": "player_m_w.glb",
+  "gender": "m",
+  "age": 0.5,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "player_f_w",
+  "file": "player_f_w.glb",
+  "gender": "f",
+  "age": 0.48,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "young_m_w",
+  "file": "young_m_w.glb",
+  "gender": "m",
+  "age": 0.42,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "young_m2_w",
+  "file": "young_m2_w.glb",
+  "gender": "m",
+  "age": 0.47,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "young_f_w",
+  "file": "young_f_w.glb",
+  "gender": "f",
+  "age": 0.42,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "student_f_w",
+  "file": "student_f_w.glb",
+  "gender": "f",
+  "age": 0.37,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "elder_f_w",
+  "file": "elder_f_w.glb",
+  "gender": "f",
+  "age": 0.84,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "tourist_m_w",
+  "file": "tourist_m_w.glb",
+  "gender": "m",
+  "age": 0.5,
+  "season": "winter",
   "clips": {
    "walk": 1.1,
    "run": 0.7666666666666667,

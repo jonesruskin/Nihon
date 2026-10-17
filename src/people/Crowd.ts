@@ -90,6 +90,8 @@ const EDGE_WALK = new Set(['minor', 'service'])
 
 // Muted Japanese street palette: navy, black, charcoal, greige, white, olive, brown, denim.
 const TOPS = [[0.03, 0.04, 0.08], [0.015, 0.015, 0.018], [0.09, 0.09, 0.1], [0.42, 0.37, 0.3], [0.75, 0.75, 0.72], [0.12, 0.14, 0.09], [0.2, 0.11, 0.07], [0.62, 0.6, 0.55], [0.05, 0.09, 0.2], [0.55, 0.12, 0.1]]
+// High summer brings out white shirts, pale blouses and linen.
+const SUMMER_TOPS = [[0.82, 0.82, 0.8], [0.7, 0.74, 0.8], [0.78, 0.72, 0.6], [0.55, 0.62, 0.7], [0.85, 0.8, 0.78]]
 const BOTTOMS = [[0.02, 0.02, 0.03], [0.06, 0.07, 0.12], [0.1, 0.1, 0.1], [0.35, 0.3, 0.24], [0.12, 0.17, 0.28], [0.05, 0.05, 0.05]]
 
 export class Crowd {
@@ -98,6 +100,8 @@ export class Crowd {
   private meshes: InstancedMesh[] = []
   private slotPeds: Ped[][] = []
   peds: Ped[] = []
+  /** Air temperature (°C), which decides how people are dressed. */
+  temperature = 18
   private edges: Edge[] = []
   private nodeEdges: number[][] = []
   private shops: Vector3[] = []
@@ -402,17 +406,34 @@ export class Crowd {
     return false
   }
 
+  /** Dressed for the weather: T-shirts fade out below ~20°C, jackets and
+   *  long sleeves take over below ~14°C (suits and shirts work all year). */
+  private pickArchetype(): number {
+    const T = this.temperature
+    let sum = 0
+    const w = this.arch.map((a) => {
+      const v = a.season === 'summer' ? clamp01((T - 13) / 9) : a.season === 'winter' ? clamp01((21 - T) / 8) : 1
+      sum += v
+      return v
+    })
+    if (sum <= 0) return -1
+    let r = Math.random() * sum
+    for (let i = 0; i < w.length; i++) if ((r -= w[i]) <= 0) return i
+    return w.length - 1
+  }
+
   private spawnOn(ei: number, t: number): boolean {
     const e = this.edges[ei]
     const p = sample(e, t, new Vector3())
     for (let tries = 0; tries < 3; tries++) {
-      const ai = Math.floor(Math.random() * this.arch.length)
+      const ai = this.pickArchetype()
+      if (ai < 0) return false
       const list = this.slotPeds[ai]
       const mesh = this.meshes[ai]
       if (list.length >= mesh.instanceMatrix.count) continue
       const pace = 0.82 + Math.random() * 0.36
       const elder = this.arch[ai].age > 0.62
-      const top = TOPS[Math.floor(Math.random() * TOPS.length)]
+      const top = this.temperature > 24 && Math.random() < 0.45 ? SUMMER_TOPS[Math.floor(Math.random() * SUMMER_TOPS.length)] : TOPS[Math.floor(Math.random() * TOPS.length)]
       const bot = BOTTOMS[Math.floor(Math.random() * BOTTOMS.length)]
       const tintA: [number, number, number, number] = [top[0], top[1], top[2], Math.random() < 0.15 ? 0 : 0.9]
       const tintB: [number, number, number, number] = [bot[0], bot[1], bot[2], 0.03 + Math.random() * 0.05]
@@ -773,4 +794,8 @@ function offset(pts: Vector3[], d: number, dy: number): Vector3[] {
     const l = Math.hypot(tx, tz) || 1
     return new Vector3(p.x + (-tz / l) * d, p.y + dy, p.z + (tx / l) * d)
   })
+}
+
+function clamp01(x: number): number {
+  return x < 0 ? 0 : x > 1 ? 1 : x
 }

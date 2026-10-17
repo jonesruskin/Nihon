@@ -23,6 +23,8 @@ export interface CrowdArchetype {
   name: string
   gender: 'm' | 'f'
   age: number
+  /** What the outfit is for: short sleeves, jackets, or all year. */
+  season: 'summer' | 'winter' | 'any'
   geometry: BufferGeometry
   vat: DataTexture
   frames: Record<string, [number, number]>
@@ -31,7 +33,7 @@ export interface CrowdArchetype {
 const BASE = `${import.meta.env.BASE_URL}models/crowd/`
 
 export async function loadCrowdArchetypes(): Promise<CrowdArchetype[]> {
-  const manifest: { name: string; gender: 'm' | 'f'; age: number }[] = await (await fetch(`${BASE}manifest.json`)).json()
+  const manifest: { name: string; gender: 'm' | 'f'; age: number; season?: CrowdArchetype['season'] }[] = await (await fetch(`${BASE}manifest.json`)).json()
   return Promise.all(
     manifest.map(async (m) => {
       let buf: ArrayBuffer | null = null
@@ -44,12 +46,12 @@ export async function loadCrowdArchetypes(): Promise<CrowdArchetype[]> {
         }
       }
       if (!buf) throw new Error(`crowd model ${m.name} failed`)
-      return { ...m, ...parse(buf) }
+      return { ...m, season: m.season ?? 'any', ...parse(buf) }
     }),
   )
 }
 
-function parse(buf: ArrayBuffer): Omit<CrowdArchetype, 'name' | 'gender' | 'age'> {
+function parse(buf: ArrayBuffer): Omit<CrowdArchetype, 'name' | 'gender' | 'age' | 'season'> {
   const dv = new DataView(buf)
   const hl = dv.getUint32(0, true)
   const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hl))) as {

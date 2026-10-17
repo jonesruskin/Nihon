@@ -11,7 +11,7 @@
 #   frames   i16 * nVert * 4 * nFrames   (xyz quantised to bounds, w = packed normal xy)
 # Header: {verts, indices, frames:{walk:[start,count], idle:[...]}, min:[x,y,z], max:[x,y,z]}
 #
-# Usage: blender -b --python scripts/blender/make_crowd.py -- public/models/people public/models/crowd
+# Usage: blender -b --python scripts/blender/make_crowd.py -- public/models/people public/models/crowd [name,name]
 import bpy, bmesh, json, os, struct, sys, math
 from mathutils import Vector
 
@@ -196,9 +196,13 @@ def bake(path, name):
     print('baked', name, nV, 'verts', len(idx) // 3, 'tris', len(frames), 'frames', len(out) // 1024, 'KB')
 
 
+# Optional third argument: comma-separated names to (re)bake; the rest of
+# the crowd manifest is kept as is.
+only = set(sys.argv[sys.argv.index('--') + 1:][2].split(',')) if len(sys.argv[sys.argv.index('--') + 1:]) > 2 else None
 manifest = json.load(open(os.path.join(src, 'manifest.json')))
 names = []
 for m in manifest:
-    bake(os.path.join(src, m['file']), m['name'])
-    names.append({'name': m['name'], 'gender': m['gender'], 'age': m['age']})
+    if only is None or m['name'] in only:
+        bake(os.path.join(src, m['file']), m['name'])
+    names.append({'name': m['name'], 'gender': m['gender'], 'age': m['age'], 'season': m.get('season', 'any')})
 json.dump(names, open(os.path.join(dst, 'manifest.json'), 'w'), indent=1)

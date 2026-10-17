@@ -900,7 +900,7 @@ export function buildTile(req: BuildRequest): TileBuild {
         let wallTop = gmax + (lowWalls || Math.max(height, kind === 1 || kind === 8 ? 6.2 : 3))
         const base = gmin - 1.2 + minH
         const obb = kind === 1 || vernacular ? minAreaRect(outer) : null
-        const pitched = !!obb && area / obb.area > (vernacular ? 0.55 : 0.72) && obb.halfShort < (vernacular ? 14 : 9) && obb.halfShort > 1.5
+        const pitched = !!obb && area / obb.area > (vernacular ? 0.66 : 0.74) && obb.halfShort < (vernacular ? 14 : 9) && obb.halfShort > 1.5
         let roofH = 0
         if (pitched) {
           roofH = obb!.halfShort * pitch

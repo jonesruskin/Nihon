@@ -32,7 +32,8 @@ if (actions) {
     else if (k === 'hold') { const [key, ms] = v.split(':'); await page.keyboard.down(key); await page.waitForTimeout(Number(ms)); await page.keyboard.up(key) }
   }
 }
-await page.screenshot({ path: out })
+console.log(JSON.stringify(stats))
+await page.screenshot({ path: out, timeout: 120000 })
 console.log(JSON.stringify(stats))
 console.log(logs.slice(0, 30).join('\n'))
 await browser.close()

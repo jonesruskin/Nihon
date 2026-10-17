@@ -77,9 +77,19 @@ class SanitizeEffect extends Effect {
         c = bad ? vec3(0.0) : clamp(c, vec3(0.0), vec3(64.0));
         // Fog / rain haze (postprocessing hands us perspective depth).
         if (uFog > 0.0) {
-          float dist = depth >= 0.99999 ? 1e6 : -getViewZ(depth);
+          // The sky only greys out when the haze layer itself is thick: in
+          // clear air the atmosphere's own scattering already does the job.
+          // Looking at the sky, the haze path grows toward the horizon, which
+          // is what pales a real summer sky to white at the skyline.
+          bool sky = depth >= 0.99999;
+          float dist = -getViewZ(depth);
+          if (sky) {
+            vec4 w = uInvViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+            float el = normalize(w.xyz / w.w - uCamPos).y;
+            dist = 3500.0 / max(0.07, el);
+          }
           float f = 1.0 - exp(-dist * uFog);
-          c = mix(c, uFogColor, depth >= 0.99999 ? f * 0.85 : f);
+          c = mix(c, uFogColor, f);
         }
         if (depth >= 0.99999 && dot(uGlow, uGlow) > 0.0) {
           vec4 w = uInvViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);

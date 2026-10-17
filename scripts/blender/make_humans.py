@@ -22,7 +22,7 @@ argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 ap = argparse.ArgumentParser()
 ap.add_argument("--out", required=True)
 ap.add_argument("--mocap", required=True)
-ap.add_argument("--only", default="")
+ap.add_argument("--only", default="", help="comma-separated names; merged into the existing manifest")
 ap.add_argument("--tex", type=int, default=512)
 args = ap.parse_args(argv)
 os.makedirs(args.out, exist_ok=True)
@@ -32,30 +32,42 @@ ASIAN = {"asian": 0.92, "caucasian": 0.05, "african": 0.03}
 CAUC = {"asian": 0.05, "caucasian": 0.9, "african": 0.05}
 
 
-def C(name, gender, age, skin, hair, clothes, race=ASIAN, weight=0.5, muscle=0.5, height=0.5, brows="eyebrow001", proxy=""):
+def C(name, gender, age, skin, hair, clothes, race=ASIAN, weight=0.5, muscle=0.5, height=0.5, brows="eyebrow001", proxy="", season="any"):
+    # season: "summer" (short sleeves / shorts), "winter" (jackets, long
+    # sleeves only) or "any" (suits, shirts) - the game dresses its crowds
+    # for the actual temperature.
     return dict(name=name, gender=gender, age=age, skin=skin, hair=hair, clothes=clothes, race=race,
-                weight=weight, muscle=muscle, height=height, brows=brows, proxy=proxy)
+                weight=weight, muscle=muscle, height=height, brows=brows, proxy=proxy, season=season)
 
 
 SHOES_M = "shoes02/shoes02.mhclo"
 SHOES_F = "shoes05/shoes05.mhclo"
 CHARACTERS = [
     # The player (neutral, tourist-ready) - full mesh
-    C("player_m", 1.0, 0.5, "young_asian_male", "short02", ["male_casualsuit04/male_casualsuit04.mhclo", SHOES_M], height=0.55),
-    C("player_f", 0.0, 0.48, "young_asian_female", "bob02", ["female_casualsuit01/female_casualsuit01.mhclo", SHOES_F], brows="eyebrow009"),
+    C("player_m", 1.0, 0.5, "young_asian_male", "short02", ["male_casualsuit04/male_casualsuit04.mhclo", SHOES_M], height=0.55, season="summer"),
+    C("player_m_w", 1.0, 0.5, "young_asian_male", "short02", ["male_casualsuit05/male_casualsuit05.mhclo", SHOES_M], height=0.55, season="winter"),
+    C("player_f", 0.0, 0.48, "young_asian_female", "bob02", ["female_casualsuit01/female_casualsuit01.mhclo", SHOES_F], brows="eyebrow009", season="summer"),
+    C("player_f_w", 0.0, 0.48, "young_asian_female", "bob02", ["female_elegantsuit01/female_elegantsuit01.mhclo", SHOES_F], brows="eyebrow009", season="winter"),
     # Crowd archetypes (proxy body for performance)
     C("salaryman_a", 1.0, 0.56, "middleage_asian_male", "short02", ["male_worksuit01/male_worksuit01.mhclo", SHOES_M], weight=0.55, proxy="male_generic"),
     C("salaryman_b", 1.0, 0.66, "middleage_asian_male", "short04", ["male_elegantsuit01/male_elegantsuit01.mhclo", SHOES_M], weight=0.6, height=0.45, brows="eyebrow003", proxy="male_generic"),
     C("salaryman_c", 1.0, 0.5, "young_asian_male", "short03", ["male_worksuit01/male_worksuit01.mhclo", SHOES_M], weight=0.45, height=0.6, proxy="male_generic"),
     C("office_f", 0.0, 0.52, "young_asian_female", "bob01", ["female_elegantsuit01/female_elegantsuit01.mhclo", SHOES_F], brows="eyebrow009", proxy="female_generic"),
-    C("young_f", 0.0, 0.42, "young_asian_female", "ponytail01", ["female_casualsuit02/female_casualsuit02.mhclo", SHOES_F], weight=0.42, brows="eyebrow010", proxy="female_generic"),
-    C("young_m", 1.0, 0.44, "young_asian_male", "short01", ["male_casualsuit02/male_casualsuit02.mhclo", SHOES_M], weight=0.45, proxy="male_generic"),
-    C("student_f", 0.0, 0.36, "young_asian_female", "long01", ["female_sportsuit01/female_sportsuit01.mhclo", SHOES_F], weight=0.4, height=0.42, brows="eyebrow010", proxy="female_generic"),
+    C("young_f", 0.0, 0.42, "young_asian_female", "ponytail01", ["female_casualsuit02/female_casualsuit02.mhclo", SHOES_F], weight=0.42, brows="eyebrow010", proxy="female_generic", season="summer"),
+    C("young_m", 1.0, 0.44, "young_asian_male", "short01", ["male_casualsuit02/male_casualsuit02.mhclo", SHOES_M], weight=0.45, proxy="male_generic", season="summer"),
+    C("student_f", 0.0, 0.36, "young_asian_female", "long01", ["female_sportsuit01/female_sportsuit01.mhclo", SHOES_F], weight=0.4, height=0.42, brows="eyebrow010", proxy="female_generic", season="summer"),
     C("casual_m", 1.0, 0.6, "middleage_asian_male", "short02", ["male_casualsuit05/male_casualsuit05.mhclo", SHOES_M], weight=0.62, proxy="male_generic"),
     C("elder_m", 1.0, 0.86, "old_asian_male", "short04", ["male_casualsuit03/male_casualsuit03.mhclo", SHOES_M, "fedora01/fedora01.mhclo"], weight=0.5, height=0.4, brows="eyebrow006", proxy="male_generic"),
-    C("elder_f", 0.0, 0.86, "old_asian_female", "bob02", ["female_casualsuit01/female_casualsuit01.mhclo", SHOES_F], weight=0.55, height=0.35, brows="eyebrow011", proxy="female_generic"),
-    C("tourist_m", 1.0, 0.5, "young_caucasian_male", "short01", ["male_casualsuit06/male_casualsuit06.mhclo", SHOES_M], race=CAUC, height=0.65, weight=0.55, proxy="male_generic"),
-    C("tourist_f", 0.0, 0.47, "young_caucasian_female", "braid01", ["female_casualsuit02/female_casualsuit02.mhclo", SHOES_F], race=CAUC, height=0.55, brows="eyebrow009", proxy="female_generic"),
+    C("elder_f", 0.0, 0.86, "old_asian_female", "bob02", ["female_casualsuit01/female_casualsuit01.mhclo", SHOES_F], weight=0.55, height=0.35, brows="eyebrow011", proxy="female_generic", season="summer"),
+    C("tourist_m", 1.0, 0.5, "young_caucasian_male", "short01", ["male_casualsuit06/male_casualsuit06.mhclo", SHOES_M], race=CAUC, height=0.65, weight=0.55, proxy="male_generic", season="summer"),
+    C("tourist_f", 0.0, 0.47, "young_caucasian_female", "braid01", ["female_casualsuit02/female_casualsuit02.mhclo", SHOES_F], race=CAUC, height=0.55, brows="eyebrow009", proxy="female_generic", season="summer"),
+    # Cold-weather counterparts: long sleeves and jackets.
+    C("young_m_w", 1.0, 0.42, "young_asian_male", "short01", ["male_casualsuit01/male_casualsuit01.mhclo", SHOES_M], weight=0.45, proxy="male_generic", season="winter"),
+    C("young_m2_w", 1.0, 0.47, "young_asian_male", "short03", ["male_casualsuit03/male_casualsuit03.mhclo", SHOES_M], weight=0.5, height=0.58, proxy="male_generic", season="winter"),
+    C("young_f_w", 0.0, 0.42, "young_asian_female", "ponytail01", ["female_elegantsuit01/female_elegantsuit01.mhclo", SHOES_F], weight=0.42, brows="eyebrow010", proxy="female_generic", season="winter"),
+    C("student_f_w", 0.0, 0.37, "young_asian_female", "long01", ["female_elegantsuit01/female_elegantsuit01.mhclo", SHOES_F], weight=0.4, height=0.42, brows="eyebrow010", proxy="female_generic", season="winter"),
+    C("elder_f_w", 0.0, 0.84, "old_asian_female", "bob02", ["female_elegantsuit01/female_elegantsuit01.mhclo", SHOES_F], weight=0.55, height=0.35, brows="eyebrow011", proxy="female_generic", season="winter"),
+    C("tourist_m_w", 1.0, 0.5, "young_caucasian_male", "short01", ["male_casualsuit05/male_casualsuit05.mhclo", SHOES_M], race=CAUC, height=0.65, weight=0.55, proxy="male_generic", season="winter"),
 ]
 
 # (clip name, bvh file, start sec, max cycle length sec, in-place)
@@ -320,16 +332,25 @@ def export(spec, path):
 
 manifest = []
 for spec in CHARACTERS:
-    if args.only and spec["name"] != args.only:
+    if args.only and spec["name"] not in args.only.split(","):
         continue
     clear_scene()
     make_human(spec)
     out = os.path.join(args.out, spec["name"] + ".glb")
     durations = export(spec, out)
     manifest.append({"name": spec["name"], "file": spec["name"] + ".glb", "gender": "m" if spec["gender"] > 0.5 else "f",
-                     "age": spec["age"], "clips": durations})
+                     "age": spec["age"], "season": spec["season"], "clips": durations})
     print("EXPORTED", out, os.path.getsize(out) // 1024, "KB", durations)
 
-if not args.only:
-    with open(os.path.join(args.out, "manifest.json"), "w") as f:
-        json.dump(manifest, f, indent=1)
+path = os.path.join(args.out, "manifest.json")
+if args.only and os.path.exists(path):
+    done = {m["name"]: m for m in manifest}
+    old = json.load(open(path))
+    merged = [done.pop(m["name"], m) for m in old] + list(done.values())
+    manifest = merged
+# Season tags for entries baked before they existed.
+seasons = {c["name"]: c["season"] for c in CHARACTERS}
+for m in manifest:
+    m["season"] = seasons.get(m["name"], m.get("season", "any"))
+with open(path, "w") as f:
+    json.dump(manifest, f, indent=1)

@@ -37,6 +37,7 @@ import { Soundscape } from '../audio/Soundscape'
 import { PlacedProps } from '../world/props/PlacedProps'
 import { NearPeople } from '../people/NearPeople'
 import { AddressLookup } from '../core/address'
+import { busRule, distanceFare, type BusRule } from '../transit/busFare'
 import { PREFECTURES } from '../data/prefectures'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
@@ -140,10 +141,13 @@ export class Game {
   private trainBaseYaw: number | null = null
   /** Money: cash and a Suica-style IC card. */
   wallet = { cash: 30000, ic: 3000 }
-  private ride: { car: AICar; kind: 'taxi' | 'bus'; meterM: number; slowS: number; last: Vector3; fare: number } | null = null
+  private ride: { car: AICar; kind: 'taxi' | 'bus'; meterM: number; slowS: number; last: Vector3; fare: number; bus?: BusRule; ticket?: number } | null = null
   private hailed: AICar | null = null
   destination: { lat: number; lon: number; label: string } | null = null
   avatar: Person | null = null
+  private avatarName = ''
+  private dressing = false
+  private dressTimer = 4
   mode: Mode = 'loading'
   private last = performance.now()
   private elapsed = 0
@@ -467,14 +471,7 @@ export class Game {
     this.player.spawn(at.add(new Vector3(0, 0.05, 0)))
     this.faceOpenSpace(at)
     this.player.heading = this.rig.yaw
-    if (!this.avatar && this.characters.manifest.length) {
-      try {
-        this.avatar = await this.characters.create(this.params.character)
-        this.player.object.add(this.avatar.object)
-      } catch (e) {
-        console.warn('avatar failed', e)
-      }
-    }
+    await this.dressAvatar()
     this.player.enabled = true
     this.mode = 'onfoot'
     this.rig.snap()
@@ -492,6 +489,38 @@ export class Game {
    * Don't start the player nose-to-wall: if the requested heading is blocked
    * within a few metres, turn to the most open direction nearest to it.
    */
+  /** The tourist dresses for the weather too: a jacket and long sleeves
+   *  below ~15°C, a T-shirt above ~18°C (in between, keep what you wear). */
+  private async dressAvatar(): Promise<void> {
+    if (this.dressing || !this.characters.manifest.length) return
+    const base = this.params.character.replace(/_w$/, '')
+    const winterName = `${base}_w`
+    const hasWinter = this.characters.manifest.some((m) => m.name === winterName)
+    const T = this.weather.now.temp
+    const cur = this.avatarName
+    let want = cur
+    if (!hasWinter) want = base
+    else if (!cur) want = T < 16.5 ? winterName : base
+    else if (T < 15) want = winterName
+    else if (T > 18) want = base
+    if (want === this.avatarName && this.avatar) return
+    this.dressing = true
+    try {
+      const next = await this.characters.create(want)
+      if (this.avatar) {
+        next.object.visible = this.avatar.object.visible
+        this.player.object.remove(this.avatar.object)
+      }
+      this.avatar = next
+      this.avatarName = want
+      this.player.object.add(next.object)
+    } catch (e) {
+      console.warn('avatar failed', want, e)
+    } finally {
+      this.dressing = false
+    }
+  }
+
   private faceOpenSpace(at: Vector3): void {
     this.physics.world.step()
     const eye = at.clone().add(new Vector3(0, 1.6, 0))
@@ -605,7 +634,13 @@ export class Game {
       const boardable = this.boardable(feet)
       if (boardable) {
         const taxi = boardable.role === 'taxi'
-        this.hud.setPrompt(taxi ? '<kbd>E</kbd>Get in the taxi <span style="opacity:.7">— the rear door opens by itself</span>' : `<kbd>E</kbd>Board the bus <span style="opacity:.7">¥210 · IC card</span>`)
+        let busNote = ''
+        if (!taxi) {
+          const a = this.address.last
+          const rule = busRule(a)
+          busNote = rule.payment === 'flat-front' ? `¥${rule.fare} flat · front door, pay now` : rule.payment === 'flat-exit' ? `¥${rule.fare} flat · pay when you get off` : 'rear door · take a 整理券 or tap IC'
+        }
+        this.hud.setPrompt(taxi ? '<kbd>E</kbd>Get in the taxi <span style="opacity:.7">— the rear door opens by itself</span>' : `<kbd>E</kbd>Board the bus <span style="opacity:.7">${busNote}</span>`)
         if (input.hit('KeyE')) this.board(boardable)
       } else if (car) {
         this.hud.setPrompt(`<kbd>E</kbd>Drive the ${car.spec.label} <span style="opacity:.7">${car.spec.labelJa}</span>`)
@@ -706,6 +741,11 @@ export class Game {
       this.weather.update(dt, g.lat, g.lon, Number.isFinite(ground) ? ground : 0, this.clock.date, this.pipeline)
       this.weather.precip.mesh.visible &&= this.pipeline.indoor < 0.5
       this.crowd.rain = this.weather.rainFactor
+      this.crowd.temperature = this.weather.now.temp
+      if ((this.dressTimer -= dt) < 0) {
+        this.dressTimer = 4
+        void this.dressAvatar()
+      }
     }
     this.pipeline.update(dt, focus)
     updateWater(this.elapsed)
@@ -964,9 +1004,20 @@ export class Game {
 
   private board(c: AICar): void {
     const kind = c.role === 'taxi' ? 'taxi' : 'bus'
+    let bus: BusRule | undefined
+    let ticket: number | undefined
     if (kind === 'bus') {
-      if (!this.pay(210, 'ic')) return
-      this.hud.toast('ピッ — ¥210 from your IC card. Buses in Tokyo charge a flat fare when you board at the front.')
+      const g = this.world.geodeticFromWorld(c.pos)
+      bus = busRule(this.address.query(g.lat, g.lon))
+      if (bus.payment === 'flat-front') {
+        if (!this.pay(bus.fare, 'ic')) return
+        this.hud.toast(`ピッ — ¥${bus.fare} from your IC card. ${bus.area} buses charge one flat fare: board at the front and pay as you get on (前乗り先払い).`, 7000)
+      } else if (bus.payment === 'flat-exit') {
+        this.hud.toast(`Board through the middle door. ${bus.area} buses are a flat <b>¥${bus.fare}</b>, paid at the front by the driver when you get off (後払い).`, 7000)
+      } else {
+        ticket = 1 + Math.floor(Math.random() * 7)
+        this.hud.toast(`Board at the rear and tap your IC card — or take a numbered ticket, <b>整理券 ${ticket}</b>. The fare board above the driver shows what each number owes; pay at the front when you get off.`, 8000)
+      }
     } else {
       c.vacant = false
       c.hailed = false
@@ -977,7 +1028,7 @@ export class Game {
     c.stopTimer = 0
     this.journal.discover(kind === 'taxi' ? 'taxi' : 'bus')
     if (kind === 'bus') this.journal.discover('ic')
-    this.ride = { car: c, kind, meterM: 0, slowS: 0, last: c.pos.clone(), fare: kind === 'taxi' ? 500 : 210 }
+    this.ride = { car: c, kind, meterM: 0, slowS: 0, last: c.pos.clone(), fare: kind === 'taxi' ? 500 : bus!.fare, bus, ticket }
     this.mode = 'passenger'
     this.player.enabled = false
     this.player.object.visible = false
@@ -1040,8 +1091,29 @@ export class Game {
       }
     } else {
       this.hud.setSpeed(null)
-      this.hud.setPrompt(c.stopTimer > 0 ? '<kbd>E</kbd>Get off here <span style="opacity:.7">次は… (next stop)</span>' : '<span style="opacity:.8">Riding the bus — press the stop button (<kbd>E</kbd>) to get off at the next stop</span>')
-      if (input.hit('KeyE') && c.stopTimer > 0) this.leaveRide()
+      const rule = r.bus!
+      r.meterM += moved
+      if (rule.payment === 'distance') r.fare = distanceFare(r.meterM / 1000)
+      // What the fare board (運賃表) above the driver shows for your ticket.
+      const board =
+        rule.payment === 'distance'
+          ? `<span style="opacity:.75">運賃表 整理券</span> <b>${r.ticket}</b> → <b>¥${r.fare.toLocaleString()}</b> · `
+          : rule.payment === 'flat-exit'
+            ? `<span style="opacity:.75">運賃</span> <b>¥${r.fare}</b> · `
+            : ''
+      this.hud.setPrompt(
+        board +
+          (c.stopTimer > 0
+            ? `<kbd>E</kbd>Get off here${rule.payment === 'flat-front' ? '' : ' and pay'} <span style="opacity:.7">次は… (next stop)</span>`
+            : '<span style="opacity:.8">Riding the bus — press the stop button (<kbd>E</kbd>) to get off at the next stop</span>'),
+      )
+      if (input.hit('KeyE') && c.stopTimer > 0) {
+        if (rule.payment !== 'flat-front') {
+          if (!this.pay(r.fare, 'ic')) return
+          this.hud.toast(`ピッ — paid <b>¥${r.fare.toLocaleString()}</b> at the front. 「ありがとうございました」`)
+        }
+        this.leaveRide()
+      }
     }
     const pivot = c.pos.clone().add(new Vector3(0, c.spec.height * 0.85, 0))
     this.rig.update(dt, { pivot, speed: c.v, stepHz: 0, distance: c.role === 'bus' ? 11 : 6.2, shoulder: 0 })

@@ -89,7 +89,7 @@ export class WeatherSystem {
       low.altitude = 750 - 250 * Math.min(1, w.rain / 4 + w.snow)
     }
     pipeline.clouds.localWeatherVelocity.set((this.wind.x / 6) * 0.00004, (this.wind.z / 6) * 0.00004)
-    pipeline.fogDensity = Math.min(0.02, 3.9 / Math.max(80, w.visibility)) * (w.visibility < 15000 ? 1 : 0.3)
+    pipeline.fogDensity = Math.min(0.02, 3.9 / Math.max(80, w.visibility)) * (w.visibility < 15000 ? 1 : 0.15)
     const light = (1 - pipeline.night) * (1 - pipeline.overcast * 0.5)
     this.precip.update(dt, w.rain, w.snow, this.wind, light, this.budget)
   }

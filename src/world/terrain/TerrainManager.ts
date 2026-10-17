@@ -389,7 +389,7 @@ export { GRID_INDICES }
 
 /** Snow settles on the land (flat ground first), rain darkens it. */
 function patchGroundWeather(mat: MeshStandardMaterial): void {
-  mat.customProgramCacheKey = () => 'nihon-ground-v1'
+  mat.customProgramCacheKey = () => 'nihon-ground-v2'
   mat.onBeforeCompile = (s) => {
     s.uniforms.uSnow = buildingUniforms.uSnow
     s.uniforms.uWet = buildingUniforms.uWet
@@ -401,6 +401,18 @@ function patchGroundWeather(mat: MeshStandardMaterial): void {
       .replace(
         '#include <map_fragment>',
         `#include <map_fragment>
+        #ifdef USE_MAP
+        // Aerial photos are shot through kilometres of blue haze: lift the
+        // airlight back out and restore the colour the ground really has.
+        {
+          vec3 sc = pow(max(diffuseColor.rgb, 0.0), vec3(1.0 / 2.2));
+          const vec3 haze = vec3(0.09, 0.11, 0.14);
+          sc = clamp((sc - haze) / (1.0 - haze), 0.0, 1.0);
+          float sl = dot(sc, vec3(0.2126, 0.7152, 0.0722));
+          sc = clamp(mix(vec3(sl), sc, 1.25), 0.0, 1.0);
+          diffuseColor.rgb = pow(sc, vec3(2.2 * 0.92));
+        }
+        #endif
         float lum = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
         diffuseColor.rgb *= mix(1.0, 0.72, uWet);
         float flatness = smoothstep(0.75, 0.93, vUpness);

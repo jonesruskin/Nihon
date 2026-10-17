@@ -37,7 +37,7 @@ function classify(p: Poi): SpotKind | null {
   if (KONBINI.test(n)) return 'konbini'
   if (p.cls === 'place_of_worship' || /神社|大社|神宮|稲荷|八幡|天満宮|宮$/.test(n)) {
     if (/寺|院|堂|観音|不動|大師/.test(n) && !/神社|神宮|大社/.test(n)) return 'temple'
-    if (/神社|大社|神宮|稲荷|八幡|天満宮|宮/.test(n)) return 'shrine'
+    if (/神社|大社|神宮|稲荷|八幡|天満宮|宮|殿|社|鳥居/.test(n)) return 'shrine'
     return p.cls === 'place_of_worship' ? 'temple' : null
   }
   if (/温泉|の湯|湯屋|銭湯|スパ/.test(n) || p.sub === 'public_bath') return 'onsen'

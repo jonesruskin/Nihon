@@ -14,7 +14,7 @@ export interface PhoneHooks {
   status: () => { hour: number; month: number; weather: WeatherPreset; quality: string; live: boolean }
 }
 
-type Tab = 'wallet' | 'journal' | 'stamps' | 'settings'
+type Tab = 'wallet' | 'journal' | 'stamps' | 'settings' | 'credits'
 
 export class Phone {
   readonly el: HTMLDivElement
@@ -114,7 +114,24 @@ export class Phone {
           <label>Weather<div class="ph-chips">${weathers.map(([w, l]) => `<button data-w="${w}" class="${st.weather === w ? 'on' : ''}">${l}</button>`).join('')}</div></label>
           <button class="ph-live ${st.live ? 'on' : ''}">⟲ Japan right now — real time and live weather</button>
           <label>Graphics<div class="ph-chips">${['low', 'medium', 'high', 'ultra'].map((q) => `<button data-q="${q}" class="${st.quality === q ? 'on' : ''}">${q}</button>`).join('')}</div></label>
-          <p class="ph-note">Keys: WASD walk · Shift run · E use · V camera · M map · Tab phone · P photo mode · H hail taxi</p>`
+          <p class="ph-note">Keys: WASD walk · Shift run · E use · V camera · M map · Tab phone · P photo mode · H hail taxi</p>
+          <button class="ph-live ph-credits">Credits &amp; open data licences</button>`
+      }
+      case 'credits': {
+        return `<h3>Credits <span>open data &amp; free assets</span></h3>
+          <div class="ph-cred">
+          <p><b>Map data</b> © OpenStreetMap contributors (ODbL), tiles by OpenFreeMap / OpenMapTiles.</p>
+          <p><b>Aerial photos, elevation, base maps</b> 国土地理院 Geospatial Information Authority of Japan (地理院タイル); elevation fill from Mapzen Terrarium (AWS Open Data).</p>
+          <p><b>3D city models</b> Project PLATEAU, 国土交通省 MLIT (CC BY 4.0-compatible open data).</p>
+          <p><b>Railways &amp; ridership</b> 国土数値情報 N02 鉄道 / S12 駅別乗降客数, 国土交通省 MLIT.</p>
+          <p><b>Station &amp; line names</b> Wikidata (CC0).</p>
+          <p><b>Population</b> Kontur Population dataset (CC BY 4.0).</p>
+          <p><b>Weather</b> Open-Meteo.com (CC BY 4.0); climate normals after 気象庁 JMA.</p>
+          <p><b>Sky &amp; clouds</b> @takram/three-atmosphere and three-clouds (MIT), Bruneton precomputed scattering.</p>
+          <p><b>People</b> MakeHuman / MPFB2 (CC0), motion capture from Carnegie Mellon University Graphics Lab (free for any use).</p>
+          <p><b>Engine</b> three.js, postprocessing, 3d-tiles-renderer, Rapier physics.</p>
+          <p><b>3D models (CC BY 4.0)</b></p><div class="ph-models">Loading…</div>
+          </div>`
       }
     }
   }
@@ -129,7 +146,19 @@ export class Phone {
     this.el.querySelectorAll<HTMLButtonElement>('[data-m]').forEach((b) => b.addEventListener('click', () => (this.hooks.setMonth(Number(b.dataset.m)), this.render())))
     this.el.querySelectorAll<HTMLButtonElement>('[data-w]').forEach((b) => b.addEventListener('click', () => (this.hooks.setWeather(b.dataset.w as WeatherPreset), this.render())))
     this.el.querySelectorAll<HTMLButtonElement>('[data-q]').forEach((b) => b.addEventListener('click', () => (this.hooks.setQuality(b.dataset.q as 'low'), this.render())))
-    this.el.querySelector('.ph-live')?.addEventListener('click', () => (this.hooks.setLive(), this.render()))
+    this.el.querySelector('.ph-live:not(.ph-credits)')?.addEventListener('click', () => (this.hooks.setLive(), this.render()))
+    this.el.querySelector('.ph-credits')?.addEventListener('click', () => {
+      this.tab = 'credits'
+      this.render()
+    })
+    const models = this.el.querySelector('.ph-models')
+    if (models)
+      fetch(`${import.meta.env.BASE_URL}models/objs/CREDITS.json`)
+        .then((r) => r.json())
+        .then((list: { title: string; author: string; url: string; license: string }[]) => {
+          models.innerHTML = list.map((m) => `<div>“${esc(m.title)}” by ${esc(m.author)} — <a href="${esc(m.url)}" target="_blank" rel="noopener">source</a> (${esc(m.license)})</div>`).join('')
+        })
+        .catch(() => (models.textContent = 'See public/models/objs/CREDITS.json'))
   }
 }
 

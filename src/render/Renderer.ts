@@ -3,6 +3,7 @@
 //   perspective (Bruneton precomputed scattering) -> bloom -> AgX -> SMAA.
 import {
   CubeCamera,
+  DirectionalLight,
   Data3DTexture,
   HalfFloatType,
   LinearFilter,
@@ -68,6 +69,7 @@ class SanitizeEffect extends Effect {
       uniform float uFog;
       uniform vec3 uFogColor;
       uniform float uFar;
+      uniform float uExposure;
       void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
         vec3 c = inputColor.rgb;
         bool bad = any(isnan(c)) || any(isinf(c));
@@ -84,7 +86,8 @@ class SanitizeEffect extends Effect {
           float el = max(dir.y, 0.0);
           c += uGlow * (0.25 + 0.75 * exp(-el * 7.0));
         }
-        outputColor = vec4(c, 1.0);
+        // Eye adaptation (postprocessing's AgX ignores renderer exposure).
+        outputColor = vec4(c * uExposure, 1.0);
       }`,
       {
         attributes: EffectAttribute.DEPTH,
@@ -95,6 +98,7 @@ class SanitizeEffect extends Effect {
           ['uFog', new Uniform(0)],
           ['uFogColor', new Uniform(new Vector3())],
           ['uFar', new Uniform(400000)],
+          ['uExposure', new Uniform(1)],
         ]),
       },
     )
@@ -154,7 +158,7 @@ export class RenderPipeline {
     this.renderer.outputColorSpace = SRGBColorSpace
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = PCFShadowMap
-    this.renderer.toneMappingExposure = 3
+    this.renderer.toneMappingExposure = 1
 
     this.camera = new PerspectiveCamera(62, 1, 0.1, 400_000)
     this.scene.add(this.camera)
@@ -180,6 +184,7 @@ export class RenderPipeline {
     this.composer.addPass(debug.has('nobloom') ? new EffectPass(this.camera, this.toneMapping) : new EffectPass(this.camera, this.bloom, this.toneMapping))
     this.composer.addPass(new EffectPass(this.camera, new SMAAEffect({ preset: SMAAPreset.HIGH })))
 
+    this.scene.add(this.moon, this.moon.target)
     this.lights = new NightLights(this.scene)
     this.lights.setPoolSize(16)
 
@@ -356,13 +361,23 @@ export class RenderPipeline {
     this.scene.environmentIntensity = (1 - this.overcast * 0.35) * (1 - 0.92 * this.indoor)
     // Eye adaptation: the visual system opens up at dusk and night.
     const el = this.sunElevation()
-    const outdoor = el > 8 ? 3 : el > -6 ? 3 + ((8 - el) / 14) * 3 : 6 + Math.min(4, (-6 - el) / 6)
-    const target = outdoor + (Math.max(outdoor, 5) - outdoor) * this.indoor
-    this.exposure += (target * (1 + this.overcast * 0.4) - this.exposure) * Math.min(1, dt * 0.8)
-    // Bloom acts on scene radiance; only what would clip after exposure blooms.
-    this.bloom.luminanceMaterial.threshold = 2.6 / this.exposure
+    // Relative to daylight: the eye opens up ~2x through dusk into night.
+    const outdoor = el > 8 ? 1 : el > -6 ? 1 + ((8 - el) / 14) * 0.7 : 1.7 + Math.min(0.5, (-6 - el) / 12)
+    const target = outdoor + (Math.max(outdoor, 1.6) - outdoor) * this.indoor
+    this.exposure += (target * (1 + this.overcast * 0.25) - this.exposure) * Math.min(1, dt * 0.8)
+    this.sanitize.uniforms.get('uExposure')!.value = this.exposure
+    // Bloom sees exposed radiance: only what would clip blooms.
+    this.bloom.luminanceMaterial.threshold = 0.9
     this.bloom.intensity = 0.55 - 0.25 * this.night
     this.renderer.toneMappingExposure = this.exposure
+    // Moonlight: a dim, cool key light so the countryside at night reads as
+    // dark rather than void (heavily exaggerated vs. the real 0.25 lux).
+    const up = new Vector3().setFromMatrixColumn(this.world.worldToECEF, 1)
+    const moonEl = up.dot(this.moonDirection)
+    this.moon.intensity = this.night * Math.max(0, Math.min(1, moonEl * 3)) * 0.05 * (1 - this.overcast * 0.8) * (1 - this.indoor)
+    this.moon.position.copy(this.moonDirection).transformDirection(this.world.ecefToWorld).multiplyScalar(500).add(focus)
+    this.moon.target.position.copy(focus)
+    this.moon.target.updateMatrixWorld()
 
     this.updateCloudSkip()
     this.lights.update(dt, this.camera.position, this.night)
@@ -381,7 +396,8 @@ export class RenderPipeline {
     ;(su.get('uFogColor')!.value as Vector3).set(fl * 0.92 + g * 1.5, fl * 0.95 + g * 1.2, fl + g)
   }
 
-  private exposure = 3
+  private exposure = 1
+  private moon = new DirectionalLight(0x9fb2d6, 0)
 
   private debugNoPost = new URLSearchParams(location.search).has('nopost')
 

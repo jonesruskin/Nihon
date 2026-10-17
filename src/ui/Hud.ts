@@ -44,7 +44,8 @@ export class Hud {
       <div class="toasts"></div>
       <div class="hints"></div>
       <div class="debug"></div>
-      <div class="speedo"><span class="speedo-v">0</span><span class="speedo-u">km/h</span></div>`
+      <div class="speedo"><span class="speedo-v">0</span><span class="speedo-u">km/h</span></div>
+      <div class="attrib">© OpenStreetMap contributors · 地理院タイル · PLATEAU · 国土数値情報 · Open-Meteo</div>`
     const q = <T extends HTMLElement>(s: string) => this.root.querySelector(s) as T
     this.loading = q('.loading')
     this.loadingStatus = q('.loading-status')

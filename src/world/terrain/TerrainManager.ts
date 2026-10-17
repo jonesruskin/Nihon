@@ -403,8 +403,8 @@ function patchGroundWeather(mat: MeshStandardMaterial): void {
         `#include <map_fragment>
         float lum = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
         diffuseColor.rgb *= mix(1.0, 0.72, uWet);
-        float flat = smoothstep(0.75, 0.93, vUpness);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.88, 0.9) * (0.82 + 0.25 * lum), uSnow * flat * 0.92);`,
+        float flatness = smoothstep(0.75, 0.93, vUpness);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.88, 0.9) * (0.82 + 0.25 * lum), uSnow * flatness * 0.92);`,
       )
   }
 }

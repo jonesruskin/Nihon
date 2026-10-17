@@ -137,7 +137,7 @@ export class NightLights {
       s.light.intensity = spec.intensity * s.level
     }
 
-    this.fill.intensity = night * (0.008 + 0.03 * this.urban)
+    this.fill.intensity = night * (0.015 + 0.03 * this.urban)
   }
 
   /** Re-apply world positions after a floating-origin rebase. */

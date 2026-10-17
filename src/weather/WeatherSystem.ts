@@ -39,7 +39,7 @@ export class WeatherSystem {
   update(dt: number, lat: number, lon: number, elevation: number, date: Date, pipeline: RenderPipeline): void {
     this.timer -= dt
     if (this.timer <= 0) {
-      this.timer = 5
+      this.timer = this.preset === 'live' ? 5 : 0.5
       const base = this.service.get(lat, lon, elevation, date)
       this.target = this.preset === 'live' ? base : { ...base, ...PRESETS[this.preset], source: 'manual' }
       // Season from the real date and place.
@@ -50,8 +50,9 @@ export class WeatherSystem {
       seasonUniforms.uAutumn.value = s.autumn
       seasonUniforms.uBare.value = s.bare
     }
-    // Ease toward the target over ~half a minute.
-    const k = Math.min(1, dt / 30)
+    // Live weather eases over ~half a minute; a chosen preset within seconds.
+    const manual = this.preset !== 'live'
+    const k = Math.min(1, dt / (manual ? 2 : 30))
     const n = this.now
     const t = this.target
     const lerp = (a: number, b: number) => a + (b - a) * k
@@ -71,7 +72,9 @@ export class WeatherSystem {
     this.wetness = raining ? Math.min(1, this.wetness + dt * (0.002 + w.rain * 0.004)) : Math.max(0, this.wetness - dt * (w.temp > 20 ? 0.00025 : 0.00014))
     // Snow settles when it's cold, melts when it's not; live data gives depth directly.
     const settled = Math.min(1, w.snowDepth / 0.08)
-    this.snowCover += ((w.snow > 0.05 && w.temp < 1.5 ? Math.max(settled, Math.min(1, this.snowCover + dt * 0.002)) : settled) - this.snowCover) * Math.min(1, dt / 20)
+    this.snowCover += ((w.snow > 0.05 && w.temp < 1.5 ? Math.max(settled, Math.min(1, this.snowCover + dt * 0.002)) : settled) - this.snowCover) * Math.min(1, dt / (manual ? 3 : 20))
+    if (manual && !raining) this.wetness = Math.max(0, this.wetness - dt * 0.05)
+    if (manual && raining) this.wetness = Math.min(1, this.wetness + dt * 0.1)
     buildingUniforms.uWet.value = Math.max(this.wetness, w.snow > 0.05 ? 0.3 : 0) * (1 - this.snowCover * 0.6)
     buildingUniforms.uSnow.value = this.snowCover
 

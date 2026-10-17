@@ -389,10 +389,9 @@ export class Game {
     this.plateau.errorTarget = t.err
   }
 
-  /** Nearest point on a street or footpath (never inside a building). */
-  private nearestWalkable(at: Vector3, maxDist = 200): Vector3 | null {
-    let best: Vector3 | null = null
-    let bd = maxDist
+  /** Points on streets and footpaths near `at`, nearest first. */
+  private walkableNear(at: Vector3, maxDist = 200): Vector3[] {
+    const out: { p: Vector3; d: number }[] = []
     const p = new Vector3()
     for (const t of this.vector.readyTiles) {
       t.group.updateWorldMatrix(true, false)
@@ -401,14 +400,38 @@ export class Game {
         for (let i = 0; i < path.pts.length; i += 3) {
           p.set(path.pts[i], path.pts[i + 1], path.pts[i + 2]).applyMatrix4(t.group.matrixWorld)
           const d = Math.hypot(p.x - at.x, p.z - at.z)
-          if (d < bd) {
-            bd = d
-            best = p.clone()
-          }
+          if (d < maxDist) out.push({ p: p.clone(), d })
         }
       }
     }
-    return best
+    return out.sort((a, b) => a.d - b.d).map((o) => o.p)
+  }
+
+  /**
+   * Nearest walkable point under open sky: OSM footpaths run through gates,
+   * halls and station buildings, and nobody should start inside a wall.
+   */
+  private nearestWalkable(at: Vector3, maxDist = 200): Vector3 | null {
+    const cands = this.walkableNear(at, maxDist)
+    if (!cands.length) return null
+    this.colliders.activateNow(at)
+    this.physics.world.step()
+    const up = new Vector3(0, 1, 0)
+    let tried = 0
+    for (const c of cands) {
+      if (tried++ > 60) break
+      const roof = this.physics.ray(c.clone().add(new Vector3(0, 0.6, 0)), up, 40)
+      if (roof !== null) continue
+      // Also keep a little elbow room around the spot.
+      let tight = 0
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2
+        const d = this.physics.ray(c.clone().add(new Vector3(0, 1.2, 0)), new Vector3(Math.cos(a), 0, Math.sin(a)), 1.2)
+        if (d !== null) tight++
+      }
+      if (tight <= 2) return c
+    }
+    return cands[0]
   }
 
   private async spawnPlayer(lat: number, lon: number): Promise<void> {
@@ -421,6 +444,7 @@ export class Game {
     const top = this.physics.groundBelow(at.x, at.y + 3, at.z, 10)
     if (top !== null) at.y = top
     this.player.spawn(at.add(new Vector3(0, 0.05, 0)))
+    this.faceOpenSpace(at)
     this.player.heading = this.rig.yaw
     if (!this.avatar && this.characters.manifest.length) {
       try {
@@ -441,6 +465,30 @@ export class Game {
       const at = this.player.feet.clone().addScaledVector(fwd, 5).addScaledVector(right, -1.5)
       void this.vehicles.spawnAt(carParam, at, this.rig.yaw)
     }
+  }
+
+  /**
+   * Don't start the player nose-to-wall: if the requested heading is blocked
+   * within a few metres, turn to the most open direction nearest to it.
+   */
+  private faceOpenSpace(at: Vector3): void {
+    this.physics.world.step()
+    const eye = at.clone().add(new Vector3(0, 1.6, 0))
+    const free = (yaw: number) => this.physics.ray(eye, new Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)), 60) ?? 60
+    if (free(this.rig.yaw) > 12) return
+    let best = this.rig.yaw
+    let score = -Infinity
+    for (let i = 1; i < 24; i++) {
+      const yaw = this.rig.yaw + (i * Math.PI * 2) / 24
+      const d = free(yaw)
+      const turn = Math.min(i, 24 - i) / 12
+      const sc = Math.min(d, 40) - turn * 6
+      if (sc > score) {
+        score = sc
+        best = yaw
+      }
+    }
+    this.rig.yaw = best
   }
 
   private updateHints(): void {

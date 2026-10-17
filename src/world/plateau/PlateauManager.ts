@@ -270,10 +270,11 @@ export class PlateauManager {
         else if (height < 9) kind = BUILDING_KIND.house
         if (kind === BUILDING_KIND.house && (fire[id] ?? '') === '耐火' && height > 9) kind = BUILDING_KIND.apartment
         const name = String(attrs[id]?.['gml:name'] ?? attrs[id]?.['name'] ?? '')
-        if (/神社|大社|神宮|稲荷|八幡|天満宮/.test(name) || (kind === BUILDING_KIND.wood && /殿|社/.test(name))) kind = BUILDING_KIND.shrine
+        if (/神社|大社|神宮|稲荷|八幡|天満宮/.test(name) || (kind === BUILDING_KIND.wood && /殿|社/.test(name)))
+          kind = /稲荷|八幡|天満宮|厳島|春日|平安|八坂|日枝|住吉|伏見/.test(name) || (!/神宮|出雲/.test(name) && seed < 0.4) ? BUILDING_KIND.shrine : BUILDING_KIND.shrinePlain
         // In historic districts small, low buildings are left to the OSM
         // builder, which gives them vernacular facades and pitched roofs.
-        if (kind !== BUILDING_KIND.wood && kind !== BUILDING_KIND.shrine && height <= 12) {
+        if (kind !== BUILDING_KIND.wood && kind !== BUILDING_KIND.shrine && kind !== BUILDING_KIND.shrinePlain && height <= 12) {
           const g2 = ecefToGeodetic(a[0] / a[3], a[1] / a[3], a[2] / a[3])
           if (inHeritage(g2.lat, g2.lon)) kind = -1
         }

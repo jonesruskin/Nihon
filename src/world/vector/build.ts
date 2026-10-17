@@ -685,8 +685,27 @@ export function buildTile(req: BuildRequest): TileBuild {
 
   // ------------------------------------------------------------- landcover
   const lc = tile.layers.landcover
-  const treeBudget = req.detail >= 1 ? 3500 : 0
+  const treeBudget = req.detail >= 1 ? 14000 : 0
   let treeCount = instances.tree.length / 6
+  // Spread the budget evenly over all woods and parks in the tile (instead of
+  // first come, first served): widen the spacing if there is too much forest.
+  let wanted = 0
+  if (lc && treeBudget) {
+    for (let i = 0; i < lc.length; i++) {
+      const f = lc.feature(i)
+      const cls = String(f.properties.class)
+      const sub = String(f.properties.subclass)
+      const isWood = cls === 'wood'
+      const isPark = cls === 'grass' && (sub === 'park' || sub === 'garden' || sub === 'grass')
+      if (!isWood && !isPark) continue
+      for (const poly of classifyRings(f.loadGeometry())) {
+        const outer = poly[0].map((p) => extentToLocal(lc.extent, p.x, p.y))
+        const a = Math.min(Math.abs(polygonArea(outer)), (2 * half) ** 2)
+        wanted += a / (isWood ? 81 : 256)
+      }
+    }
+  }
+  const spread = Math.max(1, Math.sqrt(wanted / Math.max(1, treeBudget)))
   if (lc) {
     for (let i = 0; i < lc.length && treeCount < treeBudget; i++) {
       const f = lc.feature(i)
@@ -695,7 +714,7 @@ export function buildTile(req: BuildRequest): TileBuild {
       const isWood = cls === 'wood'
       const isPark = cls === 'grass' && (sub === 'park' || sub === 'garden' || sub === 'grass')
       if (!isWood && !isPark) continue
-      const spacing = isWood ? 9 : 16
+      const spacing = (isWood ? 9 : 16) * spread
       for (const poly of classifyRings(f.loadGeometry())) {
         const rings = poly.map((r) => r.map((p) => extentToLocal(lc.extent, p.x, p.y)))
         const outer = rings[0]
@@ -753,7 +772,10 @@ export function buildTile(req: BuildRequest): TileBuild {
     }
   }
   // Shrines and temples: nearby buildings become their halls.
-  const worship: Array<{ x: number; y: number; shrine: boolean }> = []
+  const worship: Array<{ x: number; y: number; shrine: boolean; vermilion: boolean }> = []
+  // Lacquered vermilion (朱塗り) shrines vs. unpainted cypress (白木: Meiji Jingu, Ise, Izumo...).
+  const VERMILION = /稲荷|八幡|天満宮|天神|厳島|春日|平安|八坂|日枝|住吉|鶴岡|浅草|北野|生田|熊野|東照宮|氷川|伏見|祇園/
+  const PLAIN = /神宮|出雲|大神|靖國|靖国/
   if (plc0) {
     for (let i = 0; i < plc0.length; i++) {
       const f = plc0.feature(i)
@@ -765,11 +787,12 @@ export function buildTile(req: BuildRequest): TileBuild {
       const g = f.loadGeometry()[0]?.[0]
       if (!g) continue
       const p = extentToLocal(plc0.extent, g.x, g.y)
-      worship.push({ x: p[0], y: p[1], shrine: shrineName && !(templeName && !/神社|神宮|大社/.test(n)) })
+      const h = Math.abs(Math.sin(n.length * 12.9898 + (n.charCodeAt(0) || 0) * 0.37) * 43758.5453) % 1
+      worship.push({ x: p[0], y: p[1], shrine: shrineName && !(templeName && !/神社|神宮|大社/.test(n)), vermilion: VERMILION.test(n) || (!PLAIN.test(n) && h < 0.4) })
     }
   }
-  const worshipNear = (x: number, y: number): { shrine: boolean } | null => {
-    let best: { shrine: boolean } | null = null
+  const worshipNear = (x: number, y: number): { shrine: boolean; vermilion: boolean } | null => {
+    let best: { shrine: boolean; vermilion: boolean } | null = null
     let bd = 45 * 45
     for (const w of worship) {
       const d = (w.x - x) ** 2 + (w.y - y) ** 2
@@ -847,7 +870,7 @@ export function buildTile(req: BuildRequest): TileBuild {
         let over = 0.45
         let lowWalls = 0
         if (pow) {
-          kind = pow.shrine ? 10 : 5
+          kind = pow.shrine ? (pow.vermilion ? 10 : 12) : 5
           roofStyle = pow.shrine ? 8 : 4
           hip = !pow.shrine
           pitch = pow.shrine ? 0.6 : 0.72

@@ -48,9 +48,10 @@ export function at(g: BufferGeometry, x: number, y: number, z: number, rx = 0, r
 export function assemble(parts: BufferGeometry[]): BufferGeometry {
   const clean = parts.map((p) => {
     const g = p.index ? p.toNonIndexed() : p
+    g.userData.group = p.userData.group ?? 0
     for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv', 'color'].includes(k)) g.deleteAttribute(k)
     if (!g.getAttribute('uv')) g.setAttribute('uv', new BufferAttribute(new Float32Array(g.getAttribute('position').count * 2), 2))
-    if (!g.getAttribute('color')) colored(g, 0xffffff)
+    if (!g.getAttribute('color')) colored(g, 0xffffff, (g.userData.group as number) ?? 0)
     return g
   })
   const bySlot = new Map<number, BufferGeometry[]>()

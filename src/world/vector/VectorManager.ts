@@ -190,7 +190,8 @@ export class VectorManager {
           const range = o.userData.cullRange as number | undefined
           if (!range) continue
           const m = o as Mesh
-          const bs = m.geometry.boundingSphere
+          // Instanced buckets carry their own (instance-aware) bounds.
+          const bs = (m as unknown as { boundingSphere?: import('three').Sphere | null }).boundingSphere ?? m.geometry.boundingSphere
           if (!bs) continue
           this.tmp.copy(bs.center).applyMatrix4(t.group.matrixWorld)
           o.visible = this.tmp.distanceTo(cameraWorld) - bs.radius < range

@@ -305,6 +305,17 @@ FacadeSample facade() {
     rough = 0.6;
     metal = 0.0;
     isWin = 0.0;
+  } else if (kind == 12.0) {
+    // 白木 shrine hall: unpainted, weathered cypress posts and boards.
+    vec3 hinoki = vec3(0.47, 0.35, 0.24) * (0.85 + 0.25 * bhash1(s * 5.0));
+    float bf = fract(u / 2.4);
+    float post = 1.0 - aastep(0.09, min(bf, 1.0 - bf));
+    float board = 0.9 + 0.1 * step(0.5, fract(v / 0.32));
+    albedo = mix(hinoki * board * 1.15, hinoki * 0.7, post);
+    if (v < 0.6) albedo = vec3(0.42, 0.41, 0.39);
+    rough = 0.8;
+    metal = 0.0;
+    isWin = 0.0;
   } else if (kind == 11.0) {
     // Ryukyu house: weathered timber, coral-stone wall at the base.
     float stone = 1.0 - aastep(1.1, v);
@@ -356,7 +367,7 @@ export function nightFactorFromSun(sunElevationDeg: number): number {
   return Math.min(1, Math.max(0, (2 - sunElevationDeg) / 8))
 }
 
-export const BUILDING_KIND = { generic: 0, house: 1, office: 2, glass: 3, industrial: 4, wood: 5, apartment: 6, commercial: 7, machiya: 8, farmhouse: 9, shrine: 10, ryukyu: 11 } as const
+export const BUILDING_KIND = { generic: 0, house: 1, office: 2, glass: 3, industrial: 4, wood: 5, apartment: 6, commercial: 7, machiya: 8, farmhouse: 9, shrine: 10, ryukyu: 11, shrinePlain: 12 } as const
 
 export function seedColor(seed: number): Color {
   return new Color().setHSL(seed, 0.2, 0.5)

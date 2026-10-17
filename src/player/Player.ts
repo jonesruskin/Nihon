@@ -7,6 +7,9 @@ import type { Input } from './Input'
 
 export const PLAYER_GROUP = 0x0002
 export const WORLD_GROUP = 0x0001
+export const VEHICLE_BIT = 0x0004
+/** Rapier interaction groups: (membership << 16) | filter. */
+export const groups = (member: number, filter: number) => ((member & 0xffff) << 16) | (filter & 0xffff)
 
 export type Gait = 'idle' | 'walk' | 'run' | 'sprint'
 
@@ -41,7 +44,7 @@ export class Player {
     if (this.body) world.removeRigidBody(this.body)
     this.body = world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(at.x, at.y + this.halfHeight + this.radius, at.z))
     this.collider = world.createCollider(
-      R.ColliderDesc.capsule(this.halfHeight, this.radius).setCollisionGroups((PLAYER_GROUP << 16) | WORLD_GROUP),
+      R.ColliderDesc.capsule(this.halfHeight, this.radius).setCollisionGroups(groups(PLAYER_GROUP, WORLD_GROUP | VEHICLE_BIT)),
       this.body,
     )
     this.controller = world.createCharacterController(0.03)
@@ -109,7 +112,7 @@ export class Player {
       this.velocity.y = Math.max(-50, this.velocity.y - 9.81 * h)
     }
     const desired = { x: this.velocity.x * h, y: this.velocity.y * h, z: this.velocity.z * h }
-    this.controller.computeColliderMovement(this.collider, desired, undefined, WORLD_GROUP)
+    this.controller.computeColliderMovement(this.collider, desired, undefined, groups(PLAYER_GROUP, WORLD_GROUP | VEHICLE_BIT))
     const mv = this.controller.computedMovement()
     const t = this.body.translation()
     this.body.setNextKinematicTranslation({ x: t.x + mv.x, y: t.y + mv.y, z: t.z + mv.z })

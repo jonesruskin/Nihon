@@ -21,6 +21,7 @@ export class Hud {
   private toasts: HTMLDivElement
   private hints: HTMLDivElement
   private debug: HTMLDivElement
+  private speedo: HTMLDivElement
   private placeTimer = 0
 
   constructor(parent: HTMLElement) {
@@ -42,7 +43,8 @@ export class Hud {
       <div class="prompt"></div>
       <div class="toasts"></div>
       <div class="hints"></div>
-      <div class="debug"></div>`
+      <div class="debug"></div>
+      <div class="speedo"><span class="speedo-v">0</span><span class="speedo-u">km/h</span></div>`
     const q = <T extends HTMLElement>(s: string) => this.root.querySelector(s) as T
     this.loading = q('.loading')
     this.loadingStatus = q('.loading-status')
@@ -54,6 +56,7 @@ export class Hud {
     this.toasts = q('.toasts')
     this.hints = q('.hints')
     this.debug = q('.debug')
+    this.speedo = q('.speedo')
     // Compass strip: cardinal + intercardinal labels repeated.
     const labels = ['N 北', 'NE', 'E 東', 'SE', 'S 南', 'SW', 'W 西', 'NW']
     let html = ''
@@ -125,6 +128,17 @@ export class Hud {
 
   setHints(html: string): void {
     if (this.hints.innerHTML !== html) this.hints.innerHTML = html
+  }
+
+  setSpeed(kmh: number | null): void {
+    if (kmh === null) {
+      this.speedo.classList.remove('show')
+      return
+    }
+    this.speedo.classList.add('show')
+    const v = String(Math.round(kmh))
+    const el = this.speedo.firstElementChild as HTMLElement
+    if (el.textContent !== v) el.textContent = v
   }
 
   setDebug(text: string): void {

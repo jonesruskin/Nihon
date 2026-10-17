@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Vehicle viewer</title>
+<style>html,body{margin:0;background:#9aa;overflow:hidden}</style></head>
+<body><script type="module">
+import * as THREE from 'three'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
+import { CAR_SPECS, buildVehicle } from '/src/vehicles/carGeometry.ts'
+const q = new URLSearchParams(location.search)
+const ids = (q.get('ids') ?? CAR_SPECS.map(s => s.id).join(',')).split(',')
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
+renderer.setSize(innerWidth, innerHeight)
+renderer.toneMapping = THREE.AgXToneMapping
+renderer.shadowMap.enabled = true
+document.body.appendChild(renderer.domElement)
+const scene = new THREE.Scene()
+scene.background = new THREE.Color(0xb8c4c8)
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture
+const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(-6, 10, 6); sun.castShadow = true
+sun.shadow.camera.left = sun.shadow.camera.bottom = -15; sun.shadow.camera.right = sun.shadow.camera.top = 15; scene.add(sun)
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshStandardMaterial({ color: 0x55575a, roughness: 0.9 })); ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground)
+let x = 0
+for (const id of ids) {
+  const spec = CAR_SPECS.find(s => s.id === id)
+  const v = buildVehicle(spec)
+  v.root.position.x = x + spec.width / 2; v.root.rotation.y = Number(q.get('ry') ?? 0.6)
+  x += spec.width + 1.6
+  scene.add(v.root)
+}
+const cam = new THREE.PerspectiveCamera(32, innerWidth / innerHeight, 0.1, 200)
+cam.position.set(x / 2 - 2, Number(q.get('cy') ?? 3.5), Number(q.get('cz') ?? 14)); cam.lookAt(x / 2 - 2, 0.8, 0)
+renderer.render(scene, cam)
+window.ready = true
+</script></body></html>

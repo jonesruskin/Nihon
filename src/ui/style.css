@@ -41,3 +41,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d10; col
 .hints { position: fixed; right: 18px; bottom: 18px; font-size: 11px; color: rgba(255,255,255,.7); text-align: right; line-height: 2; text-shadow: 0 1px 6px rgba(0,0,0,.7); }
 .debug { position: fixed; left: 10px; top: 10px; font: 11px/1.4 ui-monospace, monospace; color: #b9f; white-space: pre; display: none; text-shadow: 0 1px 2px #000; }
 @media (max-width: 640px) { .hints { display: none; } .clock { font-size: 11px; } }
+.speedo { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); display: flex; align-items: baseline; gap: 6px; color: #fff; text-shadow: 0 2px 12px rgba(0,0,0,.6); opacity: 0; transition: opacity .3s; font-variant-numeric: tabular-nums; }
+.speedo.show { opacity: 1; }
+.speedo-v { font-size: 40px; font-weight: 300; letter-spacing: -.02em; }
+.speedo-u { font-size: 12px; opacity: .75; letter-spacing: .1em; }

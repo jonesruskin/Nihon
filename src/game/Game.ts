@@ -19,6 +19,7 @@ import { Player } from '../player/Player'
 import { CameraRig } from '../player/CameraRig'
 import { CharacterLibrary, type Person } from '../people/CharacterLibrary'
 import { Hud } from '../ui/Hud'
+import { VehicleManager } from '../vehicles/VehicleManager'
 
 export interface StartParams {
   lat: number
@@ -32,7 +33,7 @@ export interface StartParams {
   character: string
 }
 
-export type Mode = 'loading' | 'onfoot' | 'fly'
+export type Mode = 'loading' | 'onfoot' | 'driving' | 'fly'
 
 function readParams(): StartParams {
   const q = new URLSearchParams(location.search)
@@ -69,6 +70,7 @@ export class Game {
   readonly rig: CameraRig
   readonly characters = new CharacterLibrary()
   readonly hud: Hud
+  readonly vehicles: VehicleManager
   avatar: Person | null = null
   mode: Mode = 'loading'
   private last = performance.now()
@@ -90,16 +92,18 @@ export class Game {
     this.plateau = new PlateauManager(this.world, this.pipeline.camera, this.pipeline.renderer)
     this.vector = new VectorManager(this.world, this.terrain, this.plateau)
     this.colliders = new WorldColliders(this.physics)
+    this.vehicles = new VehicleManager(this.physics, this.vector)
     this.input = new Input(canvas)
     this.player = new Player(this.physics)
     this.rig = new CameraRig(this.pipeline.camera, this.physics)
     const scene = this.pipeline.scene
-    scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object)
+    scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root)
     this.wireColliders()
     this.world.onRebase((delta) => {
       this.pipeline.scene.updateMatrixWorld(true)
       this.physics.syncStatics()
       if (this.player.body) this.player.rebase(delta)
+      this.vehicles.rebase(delta)
       this.pipeline.camera.position.applyMatrix4(delta)
       this.rig.snap()
     })
@@ -212,6 +216,13 @@ export class Game {
     this.player.enabled = true
     this.mode = 'onfoot'
     this.rig.snap()
+    const carParam = new URLSearchParams(location.search).get('car')
+    if (carParam && !this.vehicles.vehicles.length) {
+      const fwd = new Vector3(-Math.sin(this.rig.yaw), 0, -Math.cos(this.rig.yaw))
+      const right = new Vector3(Math.cos(this.rig.yaw), 0, -Math.sin(this.rig.yaw))
+      const at = this.player.feet.clone().addScaledVector(fwd, 5).addScaledVector(right, -1.5)
+      void this.vehicles.spawnAt(carParam, at, this.rig.yaw)
+    }
   }
 
   private updateHints(): void {
@@ -219,7 +230,9 @@ export class Game {
     this.hud.setHints(
       this.mode === 'fly'
         ? '<kbd>WASD</kbd>fly <kbd>Q/E</kbd>down/up <kbd>Shift</kbd>fast <kbd>G</kbd>land'
-        : `<kbd>WASD</kbd>walk <kbd>Shift</kbd>run <kbd>Space</kbd>jump <kbd>V</kbd>${v} <kbd>F</kbd>fly`,
+        : this.mode === 'driving'
+          ? `<kbd>W/S</kbd>drive/brake <kbd>A/D</kbd>steer <kbd>Space</kbd>handbrake <kbd>E</kbd>get out <kbd>V</kbd>${v}`
+          : `<kbd>WASD</kbd>walk <kbd>Shift</kbd>run <kbd>Space</kbd>jump <kbd>E</kbd>use <kbd>V</kbd>${v} <kbd>F</kbd>fly`,
     )
   }
 
@@ -256,9 +269,15 @@ export class Game {
       void this.spawnPlayer(g.lat, g.lon).then(() => this.updateHints())
     }
 
+    if ((this.mode === 'onfoot' && this.player.body) || this.mode === 'driving') {
+      if (this.mode === 'onfoot') this.player.yaw = this.rig.yaw
+      this.physics.update(dt, (h) => {
+        if (this.mode === 'onfoot') this.player.fixedUpdate(h, input)
+        this.vehicles.fixedUpdate(h, input)
+      })
+      this.vehicles.sync()
+    }
     if (this.mode === 'onfoot' && this.player.body) {
-      this.player.yaw = this.rig.yaw
-      this.physics.update(dt, (h) => this.player.fixedUpdate(h, input))
       this.player.syncObject()
       if (this.avatar) {
         this.avatar.object.visible = this.rig.mode === 'third'
@@ -274,9 +293,44 @@ export class Game {
         distance: 3.4,
         shoulder: this.rig.mode === 'third' ? 0.35 : 0,
       })
+      // Interactions
+      const car = this.vehicles.nearestEnterable(feet)
+      this.hud.setPrompt(car ? `<kbd>E</kbd>Drive the ${car.spec.label} <span style="opacity:.7">${car.spec.labelJa}</span>` : null)
+      if (car && input.hit('KeyE')) this.enterVehicle(car)
       this.colliders.update(dt, feet)
       this.keepAboveGround(feet)
+      this.vehicles.update(dt, feet)
+      this.hud.setSpeed(null)
       this.maybeRebase(feet)
+    } else if (this.mode === 'driving' && this.vehicles.current) {
+      const v = this.vehicles.current
+      const pos = v.position
+      if (input.hit('KeyE') && Math.abs(v.speed) < 2) this.exitVehicle()
+      else {
+        // Chase camera eases behind the car unless the player is looking around.
+        if (Math.abs(ax.lookX) + Math.abs(ax.lookY) > 0.0005) this.lookIdle = 0
+        else this.lookIdle += dt
+        if (this.lookIdle > 1.2 && this.rig.mode === 'third') {
+          let d = v.yaw - this.rig.yaw
+          while (d > Math.PI) d -= Math.PI * 2
+          while (d < -Math.PI) d += Math.PI * 2
+          this.rig.yaw += d * Math.min(1, dt * 2.5 * Math.min(1, Math.abs(v.speed) / 3))
+          this.rig.pitch += (-0.16 - this.rig.pitch) * Math.min(1, dt * 1.5)
+        }
+        const pivot = this.rig.mode === 'first' ? v.driverEye() : pos.clone().add(new Vector3(0, v.spec.height * 0.85, 0))
+        this.rig.update(dt, {
+          pivot,
+          exclude: v.collider,
+          speed: Math.abs(v.speed),
+          stepHz: 0,
+          distance: v.spec.bus ? 11 : v.spec.length > 4.6 ? 7.2 : 6.2,
+          shoulder: 0,
+        })
+        this.hud.setSpeed(Math.abs(v.speed) * 3.6)
+        this.colliders.update(dt, pos)
+        this.vehicles.update(dt, pos)
+        this.maybeRebase(pos)
+      }
     } else if (this.mode === 'fly') {
       this.updateFly(dt)
       this.maybeRebase(cam.position)
@@ -295,6 +349,34 @@ export class Game {
     this.pipeline.render(dt)
     this.updateHud(dt)
     input.endFrame()
+  }
+
+  private lookIdle = 0
+
+  private enterVehicle(car: import('../vehicles/Vehicle').Vehicle): void {
+    this.vehicles.enter(car)
+    this.mode = 'driving'
+    this.player.enabled = false
+    this.player.object.visible = false
+    this.player.body.setEnabled(false)
+    this.rig.yaw = car.yaw
+    this.rig.snap()
+    this.hud.setPrompt(null)
+    this.hud.toast(`<b>${car.spec.labelJa}</b> · ${car.spec.label}<br><span style="opacity:.75">Japan drives on the left. Speed limits: 30–60 km/h in town, 100–120 km/h on expressways.</span>`, 6000)
+    this.updateHints()
+  }
+
+  private exitVehicle(): void {
+    const door = this.vehicles.exit()
+    if (!door) return
+    this.player.body.setEnabled(true)
+    const top = this.physics.groundBelow(door.x, door.y + 3, door.z, 8)
+    this.player.teleport(new Vector3(door.x, (top ?? door.y) + 0.05, door.z))
+    this.player.object.visible = true
+    this.player.enabled = true
+    this.mode = 'onfoot'
+    this.rig.snap()
+    this.updateHints()
   }
 
   private updateFly(dt: number): void {

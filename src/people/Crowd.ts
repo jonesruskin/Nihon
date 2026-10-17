@@ -2,7 +2,7 @@
 // sidewalks and footpaths of the loaded OSM streets (keeping left, varying
 // pace, pausing, avoiding each other), and are drawn as GPU-instanced,
 // vertex-animated MakeHuman people with per-person clothing colours.
-import { Group, InstancedMesh, Matrix4, Quaternion, Vector3 } from 'three'
+import { BufferAttribute, BufferGeometry, Group, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Quaternion, Vector3 } from 'three'
 import type { NavPath } from '../world/vector/build'
 import { createCrowdMesh, crowdTime, loadCrowdArchetypes, type CrowdArchetype } from './crowdModels'
 
@@ -15,6 +15,17 @@ interface Edge {
   a: number
   b: number
   width: number
+  scramble: number // -1, or index of the scramble crossing this edge belongs to
+  kind: 'foot' | 'sidewalk' | 'edge' | 'scramble'
+}
+
+/** A scramble crossing as the crowd sees it (world space, live phase). */
+export interface CrowdScramble {
+  center: Vector3
+  radius: number
+  /** Seconds into the walk phase, or -1 while cars have green. */
+  walkTime: () => number
+  pedPhase: number
 }
 
 interface Ped {
@@ -26,8 +37,12 @@ interface Ped {
   lane: number // lateral offset (m) relative to travel direction, + = left
   speed: number
   pace: number
-  state: 'walk' | 'idle'
+  state: 'walk' | 'idle' | 'wait'
   timer: number
+  waitEdge: number
+  waitX: number
+  waitZ: number
+  react: number
   pos: Vector3
   yaw: number
   phase: number
@@ -56,11 +71,17 @@ export class Crowd {
   maxRadius = 110
   radius = 110
   cap = 250
+  scrambles: CrowdScramble[] = []
+  /** Painted zebra bars along every scramble crossing path (diagonals too). */
+  private stripes = new Mesh(new BufferGeometry(), new MeshStandardMaterial({ color: 0xe8e8e2, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }))
+  private corner = new Map<number, number>() // node -> scramble index
   target = 0
   ready = false
   private grid = new Map<string, Ped[]>()
 
   async init(capacityPerArchetype = 120): Promise<void> {
+    this.stripes.receiveShadow = true
+    this.root.add(this.stripes)
     this.arch = await loadCrowdArchetypes()
     for (const a of this.arch) {
       const m = createCrowdMesh(a, capacityPerArchetype)
@@ -70,6 +91,20 @@ export class Crowd {
       this.root.add(m)
     }
     this.ready = true
+  }
+
+  /** Debug: the pedestrian network as line segments, coloured by kind. */
+  debugLines(): { pos: Float32Array; col: Float32Array } {
+    const pos: number[] = []
+    const col: number[] = []
+    for (const e of this.edges) {
+      const c = e.scramble >= 0 ? [1, 0, 0] : e.kind === 'foot' ? [0, 1, 0] : e.kind === 'sidewalk' ? [0, 0.5, 1] : [1, 1, 0]
+      for (let i = 1; i < e.pts.length; i++) {
+        pos.push(e.pts[i - 1].x, e.pts[i - 1].y + 0.3, e.pts[i - 1].z, e.pts[i].x, e.pts[i].y + 0.3, e.pts[i].z)
+        col.push(...c, ...c)
+      }
+    }
+    return { pos: new Float32Array(pos), col: new Float32Array(col) }
   }
 
   /** Commercial POIs within r of p (for the density model). */
@@ -104,7 +139,7 @@ export class Crowd {
       return id
     }
     const edges: Edge[] = []
-    const add = (pts: Vector3[], width: number) => {
+    const add = (pts: Vector3[], width: number, kind: Edge['kind']) => {
       if (pts.length < 2) return
       const cum = [0]
       for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + pts[i].distanceTo(pts[i - 1]))
@@ -116,7 +151,7 @@ export class Crowd {
         min.min(p)
         max.max(p)
       }
-      edges.push({ min, max, pts, cum, len, a: node(pts[0]), b: node(pts[pts.length - 1]), width })
+      edges.push({ min, max, pts, cum, len, a: node(pts[0]), b: node(pts[pts.length - 1]), width, scramble: -1, kind })
     }
     this.shops = []
     for (const t of tiles) {
@@ -128,13 +163,15 @@ export class Crowd {
         for (let i = 0; i < path.pts.length; i += 3) raw.push(new Vector3(path.pts[i], path.pts[i + 1], path.pts[i + 2]).applyMatrix4(m))
         if (path.kind === 'foot') {
           if (path.cls === 'steps' || path.width <= 0) continue
-          add(raw, Math.max(1.2, path.width * 0.8))
+          add(raw, Math.max(1.2, path.width * 0.8), 'foot')
         } else {
           const side = SIDEWALK[path.cls]
           if (side) {
-            for (const s of [-1, 1]) add(offset(raw, s * (path.width / 2 + side / 2), 0.15), side * 0.8)
+            // One-way major roads are carriageways of a dual road: pavement on the left only.
+            const sides = path.oneway !== 0 && path.cls !== 'tertiary' ? [path.oneway > 0 ? -1 : 1] : [-1, 1]
+            for (const s of sides) add(offset(raw, s * (path.width / 2 + side / 2), 0.15), side * 0.8, 'sidewalk')
           } else if (EDGE_WALK.has(path.cls) && !path.bridge) {
-            for (const s of [-1, 1]) add(offset(raw, s * (path.width / 2 - 0.6), 0), 0.8)
+            for (const s of [-1, 1]) add(offset(raw, s * (path.width / 2 - 0.6), 0), 0.8, 'edge')
           }
         }
       }
@@ -143,6 +180,8 @@ export class Crowd {
         this.shops.push(new Vector3(p.x, p.y, p.z).applyMatrix4(m))
       }
     }
+    this.addScrambles(nodes, edges)
+    this.paintStripes(edges)
     this.edges = edges
     this.nearEdges = []
     this.nodeEdges = nodes.map(() => [])
@@ -184,8 +223,84 @@ export class Crowd {
       if (best) {
         p.edge = best[0]
         p.t = best[1]
+        if (p.state === 'wait') p.state = 'walk'
+        p.waitEdge = -1
       } else this.despawn(p)
     }
+  }
+
+  /**
+   * Turn each scramble junction into corners joined by crossing edges in
+   * every direction (diagonals included); drop the ordinary crossings inside.
+   */
+  private addScrambles(nodes: Vector3[], edges: Edge[]): void {
+    this.corner.clear()
+    this.scrambles.forEach((sc, si) => {
+      const c = sc.center
+      // The mapped crosswalks through the junction tell us where its corners
+      // are: their endpoints. Remove them; scramble edges replace them.
+      const ends: number[] = []
+      for (let i = edges.length - 1; i >= 0; i--) {
+        const e = edges[i]
+        if (e.scramble >= 0) continue
+        const mid = e.pts[Math.floor(e.pts.length / 2)]
+        if (Math.hypot(mid.x - c.x, mid.z - c.z) < sc.radius - 4) {
+          if (e.kind === 'foot') ends.push(e.a, e.b)
+          edges.splice(i, 1)
+        }
+      }
+      let cand = ends
+        .map((id) => ({ id, p: nodes[id], d: Math.hypot(nodes[id].x - c.x, nodes[id].z - c.z) }))
+        .filter((n) => n.d > sc.radius * 0.45 && n.d < sc.radius + 20)
+      if (cand.length < 3) {
+        // No mapped crosswalks: use pavement nodes on a ring around the junction.
+        cand = nodes.map((p, id) => ({ id, p, d: Math.hypot(p.x - c.x, p.z - c.z) })).filter((n) => n.d > sc.radius - 8 && n.d < sc.radius + 16)
+      }
+      // Cluster within 9 m; one corner per cluster (the node nearest the centre).
+      const corners: typeof cand = []
+      for (const n of cand.sort((a, b) => a.d - b.d)) if (!corners.some((k) => k.p.distanceTo(n.p) < 9)) corners.push(n)
+      if (corners.length < 3) return
+      for (const k of corners) this.corner.set(k.id, si)
+      for (let i = 0; i < corners.length; i++)
+        for (let j = i + 1; j < corners.length; j++) {
+          const a = nodes[corners[i].id]
+          const b = nodes[corners[j].id]
+          const pts = [a.clone(), b.clone()]
+          const len = a.distanceTo(b)
+          if (len > sc.radius * 2.5) continue
+          const min = a.clone().min(b)
+          const max = a.clone().max(b)
+          edges.push({ min, max, pts, cum: [0, len], len, a: corners[i].id, b: corners[j].id, width: 7, scramble: si, kind: 'scramble' })
+        }
+    })
+  }
+
+  private paintStripes(edges: Edge[]): void {
+    const pos: number[] = []
+    const idx: number[] = []
+    for (const e of edges) {
+      if (e.scramble < 0) continue
+      const a = e.pts[0]
+      const b = e.pts[e.pts.length - 1]
+      const dx = (b.x - a.x) / e.len
+      const dz = (b.z - a.z) / e.len
+      const half = 2.0
+      // Bars 45 cm deep every 90 cm, skipping the kerbside ends.
+      for (let t = 3; t < e.len - 3; t += 0.9) {
+        const y = a.y + ((b.y - a.y) * t) / e.len - 0.12
+        const base = pos.length / 3
+        for (const [u, w] of [[t, -half], [t, half], [t + 0.45, half], [t + 0.45, -half]]) {
+          pos.push(a.x + dx * u - dz * w, y, a.z + dz * u + dx * w)
+        }
+        idx.push(base, base + 1, base + 2, base, base + 2, base + 3, base, base + 2, base + 1, base, base + 3, base + 2)
+      }
+    }
+    const g = new BufferGeometry()
+    g.setAttribute('position', new BufferAttribute(new Float32Array(pos), 3))
+    g.setAttribute('normal', new BufferAttribute(new Float32Array(pos.length).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3))
+    g.setIndex(idx)
+    this.stripes.geometry.dispose()
+    this.stripes.geometry = g
   }
 
   /** Follow a floating-origin rebase, then re-seat on the rebuilt network. */
@@ -225,10 +340,20 @@ export class Crowd {
     for (let tries = 0; tries < 12; tries++) {
       const ei = this.nearEdges[Math.floor(Math.random() * this.nearEdges.length)]
       const e = this.edges[ei]
+      if (e.scramble >= 0 && this.scrambles[e.scramble].walkTime() < 0) continue
       const t = Math.random() * e.len
       const p = sample(e, t, new Vector3())
       const d = Math.hypot(p.x - near.x, p.z - near.z)
       if (d < minR || d > maxR) continue
+      if (this.spawnOn(ei, t)) return true
+    }
+    return false
+  }
+
+  private spawnOn(ei: number, t: number): boolean {
+    const e = this.edges[ei]
+    const p = sample(e, t, new Vector3())
+    for (let tries = 0; tries < 3; tries++) {
       const ai = Math.floor(Math.random() * this.arch.length)
       const list = this.slotPeds[ai]
       const mesh = this.meshes[ai]
@@ -246,6 +371,10 @@ export class Crowd {
         pace: pace * (elder ? 0.78 : 1),
         state: Math.random() < 0.1 ? 'idle' : 'walk',
         timer: Math.random() * 20,
+        waitEdge: -1,
+        waitX: 0,
+        waitZ: 0,
+        react: 0,
         pos: p,
         yaw: 0,
         phase: Math.random(),
@@ -263,6 +392,35 @@ export class Crowd {
       return true
     }
     return false
+  }
+
+  /** Spawn someone already waiting at a corner of scramble `si`. */
+  private spawnAtCorner(si: number): boolean {
+    const corners = [...this.corner].filter(([, k]) => k === si).map(([n]) => n)
+    if (!corners.length) return false
+    const node = corners[Math.floor(Math.random() * corners.length)]
+    const inc = this.nodeEdges[node] ?? []
+    const plain = inc.filter((i) => this.edges[i].scramble < 0)
+    const cross = inc.filter((i) => this.edges[i].scramble >= 0)
+    if (!plain.length || !cross.length) return false
+    const ei = plain[Math.floor(Math.random() * plain.length)]
+    const e = this.edges[ei]
+    const before = this.peds.length
+    // Reuse spawn() bookkeeping by spawning on the edge end, then switch to waiting.
+    const ok = this.spawnOn(ei, e.a === node ? 0 : e.len)
+    if (!ok || this.peds.length === before) return false
+    const p = this.peds[this.peds.length - 1]
+    const ni = cross[Math.floor(Math.random() * cross.length)]
+    const sc = this.scrambles[si]
+    const cn = this.edges[ni].a === node ? this.edges[ni].pts[0] : this.edges[ni].pts[this.edges[ni].pts.length - 1]
+    const away = Math.atan2(cn.z - sc.center.z, cn.x - sc.center.x) + (Math.random() - 0.5) * 2.2
+    const r = 0.6 + Math.sqrt(Math.random()) * 4.5
+    p.state = 'wait'
+    p.waitEdge = ni
+    p.react = Math.random() * 2.5
+    p.waitX = cn.x + Math.cos(away) * r - p.pos.x
+    p.waitZ = cn.z + Math.sin(away) * r - p.pos.z
+    return true
   }
 
   private despawn(p: Ped): void {
@@ -308,7 +466,12 @@ export class Crowd {
       this.spawnTimer = 0.25
       const missing = this.target - this.peds.length
       const initial = this.peds.length < this.target * 0.3
-      for (let i = 0; i < Math.min(missing, initial ? 60 : 8); i++) this.spawn(cam, initial ? 4 : this.radius * 0.7, this.radius)
+      const sc = this.scrambles.findIndex((x) => x.walkTime() < 0 && Math.hypot(x.center.x - cam.x, x.center.z - cam.z) < this.radius)
+      for (let i = 0; i < Math.min(missing, initial ? 60 : 8); i++) {
+        // People keep arriving at a scramble's corners while cars have green.
+        if (sc >= 0 && Math.random() < 0.5 && this.spawnAtCorner(sc)) continue
+        this.spawn(cam, initial ? 4 : this.radius * 0.7, this.radius)
+      }
       if (missing < -10) {
         // Thin out from the far edge.
         const far = [...this.peds].sort((a, b) => b.pos.distanceToSquared(cam) - a.pos.distanceToSquared(cam))
@@ -329,14 +492,41 @@ export class Crowd {
       const e = this.edges[p.edge]
       if (!e) continue
       p.timer -= dt
+      if (p.state === 'wait') {
+        // Waiting at the kerb for the scramble: go when the walk phase starts
+        // (after a human reaction delay).
+        p.speed += (0 - p.speed) * Math.min(1, dt * 4)
+        const ne = this.edges[p.waitEdge]
+        const sc = ne ? this.scrambles[ne.scramble] : null
+        const wt = sc ? sc.walkTime() : 0
+        if (!ne || (wt >= 0 && wt > p.react)) {
+          p.state = 'walk'
+          p.timer = 30 + Math.random() * 60
+          if (ne) this.enter(p, p.waitEdge, ne.a === this.cornerNodeOf(p) ? 1 : -1)
+        } else {
+          // Face the crossing while standing.
+          sample(e, p.t, p.pos)
+          const goal = ne.a === this.cornerNodeOf(p) ? ne.pts[ne.pts.length - 1] : ne.pts[0]
+          const yaw = Math.atan2(goal.x - p.pos.x, goal.z - p.pos.z)
+          let d = yaw - p.yaw
+          while (d > Math.PI) d -= Math.PI * 2
+          while (d < -Math.PI) d += Math.PI * 2
+          p.yaw += d * Math.min(1, dt * 3)
+          p.pos.x += p.waitX
+          p.pos.z += p.waitZ
+          continue
+        }
+      }
       if (p.state === 'idle') {
         p.speed += (0 - p.speed) * Math.min(1, dt * 3)
         if (p.timer <= 0) {
           p.state = 'walk'
           p.timer = 20 + Math.random() * 60
         }
-      } else {
-        let want = 1.32 * p.pace
+      } else if (p.state === 'walk') {
+        let want = 1.32 * p.pace * (e.scramble >= 0 ? 1.15 : 1)
+        // Caught on the crossing when the lights change: hurry.
+        if (e.scramble >= 0 && this.scrambles[e.scramble].walkTime() < 0) want = 2.3 * p.pace
         // Slow down behind someone walking the same way; sidestep oncoming people.
         sample(e, p.t + p.dir * 0.5, tmp)
         fwd.subVectors(tmp, p.pos).setY(0).normalize()
@@ -379,7 +569,8 @@ export class Crowd {
         while (d < -Math.PI) d += Math.PI * 2
         p.yaw += d * Math.min(1, dt * 6)
       }
-      p.lane += ((0.2 + p.phase * 0.3) * e2.width * 0.5 - p.lane) * Math.min(1, dt * 0.3)
+      const laneGoal = e2.scramble >= 0 ? (p.phase - 0.5) * e2.width : (0.2 + p.phase * 0.3) * e2.width * 0.5
+      p.lane += (laneGoal - p.lane) * Math.min(1, dt * 0.3)
     }
     // Write instances.
     for (let ai = 0; ai < this.meshes.length; ai++) {
@@ -411,17 +602,61 @@ export class Crowd {
       p.t = Math.max(0, Math.min(e.len, p.t))
       return
     }
-    const ni = options[Math.floor(Math.random() * options.length)]
-    const n = this.edges[ni]
-    if (n.a === at) {
-      p.edge = ni
-      p.dir = 1
-      p.t = 0
-    } else {
-      p.edge = ni
-      p.dir = -1
-      p.t = n.len
+    let ni = options[Math.floor(Math.random() * options.length)]
+    // Near a scramble, most people are heading for it: steer toward the junction.
+    const here = at === e.a ? e.pts[0] : e.pts[e.pts.length - 1]
+    const sc0 = this.scrambles.find((sc) => Math.hypot(here.x - sc.center.x, here.z - sc.center.z) < 90)
+    if (sc0 && Math.random() < 0.65 && this.edges[p.edge].scramble < 0) {
+      let best = Infinity
+      for (const i of options) {
+        const o = this.edges[i]
+        const far = o.a === at ? o.pts[o.pts.length - 1] : o.pts[0]
+        const d = Math.hypot(far.x - sc0.center.x, far.z - sc0.center.z) + Math.random() * 6
+        if (d < best) {
+          best = d
+          ni = i
+        }
+      }
     }
+    const cross = options.filter((i) => this.edges[i].scramble >= 0)
+    if (cross.length && this.edges[p.edge].scramble < 0 && Math.random() < 0.75) {
+      ni = cross[Math.floor(Math.random() * cross.length)]
+      const sc = this.scrambles[this.edges[ni].scramble]
+      const wt = sc.walkTime()
+      if (wt < 0 || wt > sc.pedPhase - 10) {
+        // Red for pedestrians: wait at the corner.
+        p.state = 'wait'
+        p.waitEdge = ni
+        p.react = Math.random() * 2.5 // reaction delay once it turns green
+        p.t = Math.max(0, Math.min(e.len, p.t))
+        // Stand somewhere in the kerbside crowd, on the pavement side.
+        const cn = this.edges[ni].a === at ? this.edges[ni].pts[0] : this.edges[ni].pts[this.edges[ni].pts.length - 1]
+        const away = Math.atan2(cn.z - sc.center.z, cn.x - sc.center.x) + (Math.random() - 0.5) * 2.2
+        const r = 0.6 + Math.sqrt(Math.random()) * 4.2
+        const here = sample(e, p.t, new Vector3())
+        p.waitX = cn.x + Math.cos(away) * r - here.x
+        p.waitZ = cn.z + Math.sin(away) * r - here.z
+        return
+      }
+    } else if (cross.length && this.edges[p.edge].scramble < 0) {
+      const plain = options.filter((i) => this.edges[i].scramble < 0)
+      if (plain.length) ni = plain[Math.floor(Math.random() * plain.length)]
+    }
+    this.enter(p, ni, this.edges[ni].a === at ? 1 : -1)
+  }
+
+  private enter(p: Ped, ni: number, dir: 1 | -1): void {
+    const n = this.edges[ni]
+    p.edge = ni
+    p.dir = dir
+    p.t = dir === 1 ? 0 : n.len
+    p.waitEdge = -1
+  }
+
+  /** The scramble corner node a waiting pedestrian stands at. */
+  private cornerNodeOf(p: Ped): number {
+    const e = this.edges[p.edge]
+    return p.t <= e.len / 2 ? e.a : e.b
   }
 }
 

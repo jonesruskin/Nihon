@@ -247,7 +247,11 @@ export function buildTile(req: BuildRequest): TileBuild {
     }
     // Sidewalks along major roads (Japan: raised kerb, pavers).
     if (spec && spec.side > 0 && !bridge && req.detail >= 1) {
-      for (const sign of [-1, 1]) {
+      // A one-way major road is one carriageway of a dual road: its kerb and
+      // pavement are on the left of travel (Japan), the median on the right.
+      const ow = Number(L.props.oneway ?? 0)
+      const sides = ow !== 0 && spec.cls <= 3 ? [ow > 0 ? -1 : 1] : [-1, 1]
+      for (const sign of sides) {
         let pv: number[] | null = null
         for (let i = 0; i < pts.length; i++) {
           const a = pts[Math.max(0, i - 1)]

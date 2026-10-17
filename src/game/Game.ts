@@ -1,6 +1,6 @@
 // NIHON game orchestrator: boots the world at a real place in Japan, streams
 // it in around the player, and runs the frame loop.
-import { Raycaster, Vector3, type Mesh } from 'three'
+import { BufferAttribute, BufferGeometry, LineBasicMaterial, LineSegments, Raycaster, Vector3, type Mesh } from 'three'
 import { WorldFrame } from '../core/frame'
 import { GameClock, fromJst, jstParts } from '../core/clock'
 import { pendingRequests } from '../core/net'
@@ -27,6 +27,7 @@ import { RailRide } from '../transit/RailRide'
 import { Crowd } from '../people/Crowd'
 import { PopulationGrid, pedestriansPerHectare } from '../people/density'
 import { DESTINATIONS } from '../data/places'
+import { SCRAMBLES, scrambleWalkTime } from '../people/scramble'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
 
@@ -185,8 +186,12 @@ export class Game {
         return { lat: g.lat, lon: g.lon }
       },
     })
+    this.placeScrambles()
+    this.traffic.graph.allRed = (pos) =>
+      this.crowd.scrambles.some((sc) => sc.walkTime() >= 0 && Math.hypot(pos.x - sc.center.x, pos.z - sc.center.z) < sc.radius + 18)
     this.wireColliders()
     this.world.onRebase((delta) => {
+      this.placeScrambles()
       this.rail.snap.invalidate()
       this.crowd.rebase(delta)
       this.pipeline.scene.updateMatrixWorld(true)
@@ -344,6 +349,7 @@ export class Game {
     this.player.enabled = true
     this.mode = 'onfoot'
     this.rig.snap()
+    this.placeScrambles()
     const carParam = new URLSearchParams(location.search).get('car')
     if (carParam && !this.vehicles.vehicles.length) {
       const fwd = new Vector3(-Math.sin(this.rig.yaw), 0, -Math.cos(this.rig.yaw))
@@ -528,6 +534,16 @@ export class Game {
   }
 
   private lookIdle = 0
+
+  /** Scramble crossings within reach, in world space, on the game clock. */
+  private placeScrambles(): void {
+    this.crowd.scrambles = SCRAMBLES.filter((s) => Math.hypot((s.lat - this.world.frame.lat) * 111000, (s.lon - this.world.frame.lon) * 91000) < 8000).map((s) => ({
+      center: this.world.worldFromGeodetic(s.lat, s.lon, this.terrain.heightAt(s.lat, s.lon) || 0),
+      radius: s.radius,
+      pedPhase: s.ped,
+      walkTime: () => scrambleWalkTime(s, this.clock.date.getTime() / 1000),
+    }))
+  }
 
   /** Real-data crowd density around the player → number of pedestrians. */
   private updateCrowd(dt: number, at: Vector3): void {
@@ -941,6 +957,18 @@ export class Game {
       pedTarget: Math.round(this.crowdTarget),
       pedPerHa: Math.round(this.pedDensity * 10) / 10,
     }
+  }
+
+  /** Debug: draw the pedestrian network (green foot, blue sidewalk, yellow road edge, red scramble). */
+  debugCrowdLines(): number {
+    const d = this.crowd.debugLines()
+    const g = new BufferGeometry()
+    g.setAttribute('position', new BufferAttribute(d.pos, 3))
+    g.setAttribute('color', new BufferAttribute(d.col, 3))
+    const l = new LineSegments(g, new LineBasicMaterial({ vertexColors: true, depthTest: false }))
+    l.renderOrder = 999
+    this.pipeline.scene.add(l)
+    return d.pos.length / 6
   }
 
   /** Debug: what does a ray from the camera hit? */

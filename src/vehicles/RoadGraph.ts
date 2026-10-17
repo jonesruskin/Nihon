@@ -46,6 +46,8 @@ const SPEED_KMH: Record<string, number> = {
 const DRIVABLE = new Set(Object.keys(SPEED_KMH))
 
 export class RoadGraph {
+  /** Optional: is this junction currently all-red (scramble walk phase)? */
+  allRed: ((pos: Vector3) => boolean) | null = null
   lanes: Lane[] = []
   private nodeIndex = new Map<string, number>()
   nodePos: Vector3[] = []
@@ -198,6 +200,8 @@ export class RoadGraph {
   isGreen(lane: Lane, time: number): boolean {
     if (lane.signal === null) return true
     const s = this.signals[lane.signal]
+    // All-red while a scramble crossing gives pedestrians every direction.
+    if (this.allRed?.(s.pos)) return false
     const t = (time + s.offset) % s.cycle
     // Two phases by approach axis; 3 s amber + 2 s all-red between phases.
     const axisNS = Math.abs(Math.cos(lane.heading)) > Math.abs(Math.sin(lane.heading))

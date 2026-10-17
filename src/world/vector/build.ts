@@ -515,6 +515,132 @@ export function buildTile(req: BuildRequest): TileBuild {
     }
   }
 
+  // ------------------------------------------------------------- platforms
+  // Station platforms (ホーム): raised concrete slabs at the height of the
+  // train floor, the yellow tactile line ~80 cm from the edge, and a canopy
+  // on columns over the middle. Underground/indoor platforms are skipped.
+  if (tl) {
+    for (let i = 0; i < tl.length; i++) {
+      const f = tl.feature(i)
+      if (f.type !== 3 || f.properties.subclass !== 'platform') continue
+      const pr = f.properties
+      const layer = Number(pr.layer ?? 0)
+      if (pr.indoor || Number(pr.level ?? 0) < 0 || layer < 0 || pr.brunnel === 'tunnel') continue
+      for (const poly of classifyRings(f.loadGeometry())) {
+        const outer = poly[0].map((p) => extentToLocal(tl.extent, p.x, p.y))
+        if (outer.length < 3 || !inTile(centroid(outer))) continue
+        const area = Math.abs(polygonArea(outer))
+        if (area < 20) continue
+        const hs = outer.map((p) => ground(p[0], p[1]))
+        // ~1.1 m above the rail head, which sits 0.42 m above ground (0.77 m on viaduct decks).
+        const top = Math.min(...hs) + 1.1 + (layer >= 1 ? 6.5 * Math.min(layer, 3) + 0.77 : 0.42)
+        // Inward offset ring for the tactile border.
+        const ccw = polygonArea(outer) > 0
+        const inset = 1.2
+        const inner: P2[] = outer.map((p, k) => {
+          const a = outer[(k - 1 + outer.length) % outer.length]
+          const b = outer[(k + 1) % outer.length]
+          let e1x = p[0] - a[0], e1y = p[1] - a[1]
+          let e2x = b[0] - p[0], e2y = b[1] - p[1]
+          const l1 = Math.hypot(e1x, e1y) || 1, l2 = Math.hypot(e2x, e2y) || 1
+          e1x /= l1; e1y /= l1; e2x /= l2; e2y /= l2
+          // inward normal of each edge (left of travel for CCW rings)
+          const s = ccw ? 1 : -1
+          const n1x = -e1y * s, n1y = e1x * s, n2x = -e2y * s, n2y = e2x * s
+          let bx = n1x + n2x, by = n1y + n2y
+          const bl = Math.hypot(bx, by) || 1
+          bx /= bl; by /= bl
+          const miter = Math.min(2.5, 1 / Math.max(0.3, bx * n1x + by * n1y))
+          return [p[0] + bx * inset * miter, p[1] + by * inset * miter]
+        })
+        const narrow = Math.abs(polygonArea(inner)) < area * 0.25
+        const ring = narrow ? outer : inner
+        // Top surface.
+        const flat: number[] = []
+        for (const p of ring) flat.push(p[0], p[1])
+        const tri = earcut(flat)
+        const base = sidewalks.vertexCount
+        for (const p of ring) {
+          const v = V(p[0], p[1], top)
+          sidewalks.vertex(v[0], v[1], v[2], 0, 1, 0, 5, 0)
+        }
+        for (let k = 0; k < tri.length; k += 3) sidewalks.triUp(base + tri[k], base + tri[k + 1], base + tri[k + 2])
+        // Tactile border ribbon (u = metres from the edge).
+        if (!narrow) {
+          for (let k = 0; k < outer.length; k++) {
+            const k2 = (k + 1) % outer.length
+            const o1 = V(outer[k][0], outer[k][1], top), o2 = V(outer[k2][0], outer[k2][1], top)
+            const i1 = V(inner[k][0], inner[k][1], top), i2 = V(inner[k2][0], inner[k2][1], top)
+            const a = sidewalks.vertex(o1[0], o1[1], o1[2], 0, 1, 0, 0, 0)
+            const b = sidewalks.vertex(o2[0], o2[1], o2[2], 0, 1, 0, 0, 0)
+            const c = sidewalks.vertex(i2[0], i2[1], i2[2], 0, 1, 0, inset, 0)
+            const d = sidewalks.vertex(i1[0], i1[1], i1[2], 0, 1, 0, inset, 0)
+            sidewalks.triUp(a, b, c)
+            sidewalks.triUp(a, c, d)
+          }
+        }
+        // Platform walls down to the ground.
+        for (let k = 0; k < outer.length; k++) {
+          const p = outer[k]
+          const q = outer[(k + 1) % outer.length]
+          const ex = q[0] - p[0], ey = q[1] - p[1]
+          const l = Math.hypot(ex, ey) || 1
+          const nx = ey / l, ny = -ex / l
+          const g0 = Math.min(ground(p[0], p[1]), ground(q[0], q[1])) - 0.3
+          const t1 = V(p[0], p[1], top), t2 = V(q[0], q[1], top)
+          const b1 = V(p[0], p[1], g0), b2 = V(q[0], q[1], g0)
+          const a = sidewalks.vertex(t1[0], t1[1], t1[2], nx, 0, -ny, -0.15, 0)
+          const b = sidewalks.vertex(t2[0], t2[1], t2[2], nx, 0, -ny, -0.15, 0)
+          const c = sidewalks.vertex(b2[0], b2[1], b2[2], nx, 0, -ny, -0.15, 0)
+          const d = sidewalks.vertex(b1[0], b1[1], b1[2], nx, 0, -ny, -0.15, 0)
+          sidewalks.quad(a, b, c, d)
+          sidewalks.quad(d, c, b, a)
+        }
+        // Canopy over long platforms, carried on a row of columns.
+        const obb = minAreaRect(outer)
+        if (obb.halfLong > 15 && obb.halfShort > 1.6 && obb.halfShort < 9) {
+          const roofY = top + 3.3
+          const hw = obb.halfShort * 0.92
+          const hl = obb.halfLong - 3
+          const ux = obb.ax, uy = obb.ay
+          const vx = -uy, vy = ux
+          const corner = (su: number, sv: number, h: number) => V(obb.cx + ux * hl * su + vx * hw * sv, obb.cy + uy * hl * su + vy * hw * sv, h)
+          const box = (pts: Array<[number, number, number]>) => {
+            // pts: 8 corners (bottom 4 then top 4, ccw)
+            const faces = [[0, 1, 2, 3, 0, -1, 0], [7, 6, 5, 4, 0, 1, 0]]
+            for (const [a, b, c, d, nx, ny, nz] of faces) {
+              const ia = structures.vertex(...pts[a], nx, ny, nz)
+              const ib = structures.vertex(...pts[b], nx, ny, nz)
+              const ic = structures.vertex(...pts[c], nx, ny, nz)
+              const id2 = structures.vertex(...pts[d], nx, ny, nz)
+              structures.quad(ia, ib, ic, id2)
+              structures.quad(id2, ic, ib, ia)
+            }
+            for (let k = 0; k < 4; k++) {
+              const k2 = (k + 1) % 4
+              const ex = pts[k2][0] - pts[k][0], ez = pts[k2][2] - pts[k][2]
+              const el = Math.hypot(ex, ez) || 1
+              const nx = ez / el, nz = -ex / el
+              const ia = structures.vertex(...pts[k], nx, 0, nz)
+              const ib = structures.vertex(...pts[k2], nx, 0, nz)
+              const ic = structures.vertex(...pts[k2 + 4], nx, 0, nz)
+              const id2 = structures.vertex(...pts[k + 4], nx, 0, nz)
+              structures.quad(ia, ib, ic, id2)
+              structures.quad(id2, ic, ib, ia)
+            }
+          }
+          box([corner(-1, -1, roofY), corner(1, -1, roofY), corner(1, 1, roofY), corner(-1, 1, roofY), corner(-1, -1, roofY + 0.22), corner(1, -1, roofY + 0.22), corner(1, 1, roofY + 0.22), corner(-1, 1, roofY + 0.22)])
+          for (let t = -hl + 4; t <= hl - 4; t += 10) {
+            const cxp = obb.cx + ux * t, cyp = obb.cy + uy * t
+            const c = (su: number, sv: number, h: number) => V(cxp + ux * 0.15 * su + vx * 0.15 * sv, cyp + uy * 0.15 * su + vy * 0.15 * sv, h)
+            box([c(-1, -1, top), c(1, -1, top), c(1, 1, top), c(-1, 1, top), c(-1, -1, roofY), c(1, -1, roofY), c(1, 1, roofY), c(-1, 1, roofY)])
+          }
+        }
+        stats.platforms = (stats.platforms ?? 0) + 1
+      }
+    }
+  }
+
   // ------------------------------------------------------------- landcover
   const lc = tile.layers.landcover
   const treeBudget = req.detail >= 1 ? 3500 : 0

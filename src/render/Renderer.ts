@@ -113,6 +113,8 @@ export class RenderPipeline {
   private bloom: BloomEffect
   private sanitize = new SanitizeEffect()
   readonly lights: NightLights
+  /** 0 outdoors .. 1 underground (tunnels, subway): no sun or sky light. */
+  indoor = 0
   /** 0 day .. 1 night; set by the game each frame (drives lights + glow). */
   night = 0
   private toneMapping: ToneMappingEffect
@@ -314,7 +316,7 @@ export class RenderPipeline {
       Math.round(focus.z / step) * step,
     )
     this.sun.update()
-    const dim = 1 - this.overcast * 0.85
+    const dim = (1 - this.overcast * 0.85) * (1 - this.indoor)
     this.sun.intensity = dim
     this.sun.castShadow = this.overcast < 0.85 && this.sunElevation() > -2
 
@@ -328,10 +330,11 @@ export class RenderPipeline {
       this.envTarget = this.pmrem.fromCubemap(this.cubeTarget.texture)
       this.scene.environment = this.envTarget.texture
     }
-    this.scene.environmentIntensity = 1 - this.overcast * 0.35
+    this.scene.environmentIntensity = (1 - this.overcast * 0.35) * (1 - 0.92 * this.indoor)
     // Eye adaptation: the visual system opens up at dusk and night.
     const el = this.sunElevation()
-    const target = el > 8 ? 3 : el > -6 ? 3 + ((8 - el) / 14) * 3 : 6 + Math.min(4, (-6 - el) / 6)
+    const outdoor = el > 8 ? 3 : el > -6 ? 3 + ((8 - el) / 14) * 3 : 6 + Math.min(4, (-6 - el) / 6)
+    const target = outdoor + (Math.max(outdoor, 5) - outdoor) * this.indoor
     this.exposure += (target * (1 + this.overcast * 0.4) - this.exposure) * Math.min(1, dt * 0.8)
     // Bloom acts on scene radiance; only what would clip after exposure blooms.
     this.bloom.luminanceMaterial.threshold = 2.6 / this.exposure

@@ -64,7 +64,9 @@ for row in csv.DictReader(open(wd_st_path, encoding='utf-8')):
     if not ja or not m:
         continue
     base = re.sub(r'(駅|停留場|停留所|電停)$', '', re.sub(r'[（(].*?[)）]', '', ja))
-    en = re.sub(r'\s+(Station|Stop|Tram Stop)$', '', re.sub(r'\s*\(.*?\)', '', row['en'] or ''))
+    en = re.sub(r'\s+(Station|Stop|Tram Stop|Stn\.?)$', '', re.sub(r'\s*\(.*?\)', '', row['en'] or ''))
+    # Operator-prefixed labels ("Keikyu Corporation Shinagawa", "Tokyo Metro Ginza")
+    en = re.sub(r'^(JR|Keikyu|Keio|Tokyu|Odakyu|Seibu|Tobu|Keisei|Hankyu|Hanshin|Kintetsu|Nankai|Keihan|Meitetsu|Sotetsu|Toei|Tokyo Metro|Osaka Metro|Kyoto Municipal Subway|Yokohama Municipal Subway|Fukuoka City Subway|Nagoya Municipal Subway|Sapporo Municipal Subway|Kobe Municipal Subway|Sendai Subway)( Corporation| Railway| Electric Railway| Railways| Line)?\s+', '', en)
     kana = re.sub(r'(えき|ていりゅうじょう|ていりゅうしょ)$', '', row['kana'] or '')
     wd_st[norm(base)].append((float(m.group(2)), float(m.group(1)), en, kana))
 
@@ -125,10 +127,16 @@ for f in stations_raw:
     lat, lon = mid[1], mid[0]
     name = p['N02_005']
     en, kana, bd = '', '', 3000
+    # Nearest candidate within 1.5 km; among close ones prefer the plainest name.
+    best = None
     for wlat, wlon, wen, wkana in wd_st.get(norm(re.sub(r'[（(].*?[)）]', '', name)), []):
         d = haversine((lat, lon), (wlat, wlon))
-        if d < bd and (wen or wkana):
-            bd, en, kana = d, wen, wkana
+        if (wen or wkana) and d < 3000:
+            score = d + len(wen) * 15 + (0 if wkana else 400)
+            if best is None or score < best[0]:
+                best = (score, wen, wkana)
+    if best:
+        en, kana = best[1], best[2]
     li = line_ids[key]
     # N02 splits some stations into several platform features: merge them.
     dup = next((s for s in stations if s['line'] == li and s['ja'] == name and haversine((s['lat'], s['lon']), (lat, lon)) < 1500), None) \

@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Train viewer</title>
+<style>html,body{margin:0;background:#9aa;overflow:hidden}</style></head>
+<body><script type="module">
+import * as THREE from 'three'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
+import { styleForLine, buildConsist } from '/src/transit/trainModels.ts'
+const q = new URLSearchParams(location.search)
+const LINES = {
+  yamanote: { ja: '山手線', en: 'Yamanote', operator: 'JR東日本', kind: 'jr', color: '#9ACD32' },
+  chuo: { ja: '中央線', en: 'Chuo', operator: 'JR東日本', kind: 'jr', color: '#F15A22' },
+  n700: { ja: '東海道新幹線', en: 'Tokaido', operator: 'JR東海', kind: 'shinkansen', color: '#0000CD' },
+  e5: { ja: '東北新幹線', en: 'Tohoku', operator: 'JR東日本', kind: 'shinkansen', color: '#00995a' },
+  e7: { ja: '北陸新幹線', en: 'Hokuriku', operator: 'JR東日本', kind: 'shinkansen', color: '#0a6eb4' },
+  ginza: { ja: '銀座線', en: 'Ginza', operator: '東京地下鉄', kind: 'metro', color: '#FF9500' },
+  hibiya: { ja: '日比谷線', en: 'Hibiya', operator: '東京地下鉄', kind: 'metro', color: '#B5B5AC' },
+  tozai: { ja: '東西線', en: 'Tozai', operator: '東京地下鉄', kind: 'metro', color: '#009BBF' },
+  tram: { ja: '荒川線', en: 'Arakawa', operator: '東京都', kind: 'tram', color: '#E85298' },
+  odakyu: { ja: '小田原線', en: 'Odakyu', operator: '小田急電鉄', kind: 'private', color: '#2288CC' },
+}
+const which = (q.get('lines') ?? 'yamanote,n700,e5,ginza,tram').split(',')
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
+renderer.setSize(innerWidth, innerHeight)
+renderer.toneMapping = THREE.AgXToneMapping
+renderer.toneMappingExposure = Number(q.get('exp') ?? 1)
+renderer.shadowMap.enabled = true
+document.body.appendChild(renderer.domElement)
+const scene = new THREE.Scene()
+scene.background = new THREE.Color(0xb8c4c8)
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture
+const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(-20, 30, 25); sun.castShadow = true
+sun.shadow.camera.left = sun.shadow.camera.bottom = -40; sun.shadow.camera.right = sun.shadow.camera.top = 40; sun.shadow.mapSize.set(2048, 2048); scene.add(sun)
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshStandardMaterial({ color: 0x6a665e, roughness: 0.95 })); ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground)
+let x = 0
+for (const key of which) {
+  const style = styleForLine(LINES[key], Number(q.get('cars') ?? 2))
+  const cars = buildConsist(style)
+  let z = 0
+  for (const c of cars) {
+    c.group.position.set(x, 0, z - c.length / 2)
+    z -= c.length + 0.5
+    scene.add(c.group)
+  }
+  x += 5.5
+}
+const cam = new THREE.PerspectiveCamera(Number(q.get('fov') ?? 35), innerWidth / innerHeight, 0.1, 500)
+cam.position.set(Number(q.get('cx') ?? 30), Number(q.get('cy') ?? 6), Number(q.get('cz') ?? 22)); cam.lookAt(x / 2 - 2.5, 1.5, -8)
+renderer.render(scene, cam)
+window.ready = true
+</script></body></html>

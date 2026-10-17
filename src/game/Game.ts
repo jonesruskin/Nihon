@@ -23,6 +23,9 @@ import { VehicleManager } from '../vehicles/VehicleManager'
 import { Traffic, type AICar } from '../vehicles/Traffic'
 import { MapView } from '../ui/MapView'
 import type { Destination } from '../data/places'
+import { RailRide } from '../transit/RailRide'
+import { StationPanel } from '../ui/StationPanel'
+import type { Station } from '../transit/RailNetwork'
 
 export interface StartParams {
   lat: number
@@ -36,7 +39,7 @@ export interface StartParams {
   character: string
 }
 
-export type Mode = 'loading' | 'onfoot' | 'driving' | 'passenger' | 'fly'
+export type Mode = 'loading' | 'onfoot' | 'driving' | 'passenger' | 'train' | 'fly'
 
 /** `t` accepts an ISO date or a bare JST wall-clock time ("19:30") today. */
 function parseTime(t: string): Date | undefined {
@@ -87,6 +90,11 @@ export class Game {
   readonly vehicles: VehicleManager
   readonly traffic: Traffic
   readonly map: MapView
+  readonly rail: RailRide
+  readonly stationPanel: StationPanel
+  private nearStation: Station | null = null
+  private stationTimer = 0
+  private trainBaseYaw: number | null = null
   /** Money: cash and a Suica-style IC card. */
   wallet = { cash: 30000, ic: 3000 }
   private ride: { car: AICar; kind: 'taxi' | 'bus'; meterM: number; slowS: number; last: Vector3; fare: number } | null = null
@@ -133,8 +141,44 @@ export class Game {
         return { lat: g.lat, lon: g.lon, heading: -this.rig.yaw }
       },
     })
+    this.rail = new RailRide({
+      world: this.world,
+      terrain: this.terrain,
+      vector: this.vector,
+      scene,
+      hud: this.hud,
+      ui,
+      advanceClock: (sec) => this.clock.advance(sec),
+      payIC: (yen) => this.pay(yen, 'ic'),
+      finish: (st) => void this.leaveTrain(st),
+      veil: (text) => (text ? this.hud.showLoading(text) : this.hud.hideLoading()),
+      worldReadyAt: (p) => {
+        const g = this.world.geodeticFromWorld(p)
+        return this.terrain.isDetailedAt(g.lat, g.lon) && this.vector.pending === 0
+      },
+    })
+    this.stationPanel = new StationPanel(ui, () => this.rail.net, {
+      wallet: () => this.wallet,
+      charge: (yen) => {
+        if (this.wallet.cash < yen) {
+          this.hud.toast('Not enough cash to charge the card.')
+          return false
+        }
+        this.wallet.cash -= yen
+        this.wallet.ic += yen
+        this.hud.toast(`Charged ¥${yen.toLocaleString()} onto your IC card (チャージ).`)
+        return true
+      },
+      board: (route) => this.boardTrain(route),
+      close: () => this.stationPanel.hide(),
+      here: () => {
+        const g = this.world.geodeticFromWorld(this.player.feet)
+        return { lat: g.lat, lon: g.lon }
+      },
+    })
     this.wireColliders()
     this.world.onRebase((delta) => {
+      this.rail.snap.invalidate()
       this.pipeline.scene.updateMatrixWorld(true)
       this.physics.syncStatics()
       if (this.player.body) this.player.rebase(delta)
@@ -178,7 +222,13 @@ export class Game {
     const p = this.params
     this.hud.setLoading(0.05, 'Precomputing the sky over Japan…')
     this.applyQuality(p.quality)
-    await Promise.all([this.pipeline.init(), this.plateau.init(), this.physics.init(), this.characters.init()])
+    await Promise.all([
+      this.pipeline.init(),
+      this.plateau.init(),
+      this.physics.init(),
+      this.characters.init(),
+      this.rail.load().catch((e) => console.warn('rail network unavailable', e)),
+    ])
     this.hud.setLoading(0.2, 'Reading the terrain (国土地理院)…')
     await this.terrain.prefetchAround(p.lat, p.lon, 300)
     const ground = this.terrain.heightAt(p.lat, p.lon)
@@ -290,7 +340,9 @@ export class Game {
     this.hud.setHints(
       this.mode === 'fly'
         ? '<kbd>WASD</kbd>fly <kbd>Q/E</kbd>down/up <kbd>Shift</kbd>fast <kbd>G</kbd>land'
-        : this.mode === 'passenger'
+        : this.mode === 'train'
+          ? '<kbd>T</kbd>skip to next station <kbd>Shift+T</kbd>skip to destination <kbd>V</kbd>seat / cab / outside <kbd>E</kbd>get off (when stopped)'
+          : this.mode === 'passenger'
           ? `<kbd>M</kbd>map <kbd>V</kbd>${v} <kbd>E</kbd>get off`
           : this.mode === 'driving'
           ? `<kbd>W/S</kbd>drive/brake <kbd>A/D</kbd>steer <kbd>Space</kbd>handbrake <kbd>E</kbd>get out <kbd>V</kbd>${v}`
@@ -317,7 +369,7 @@ export class Game {
     const ax = input.axes()
     this.rig.look(ax.lookX, ax.lookY)
     if (input.wheel) this.rig.zoom(input.wheel)
-    if (input.hit('KeyV')) {
+    if (input.hit('KeyV') && this.mode !== 'train') {
       this.rig.toggle()
       this.updateHints()
     }
@@ -325,7 +377,8 @@ export class Game {
       this.map.toggle()
       if (this.map.open) document.exitPointerLock?.()
     }
-    input.enabled = !this.map.open && this.mode !== 'loading'
+    input.enabled = !this.map.open && !this.stationPanel.open && this.mode !== 'loading'
+    if (this.stationPanel.open && input.hitAlways('Escape')) this.stationPanel.hide()
     if (input.hit('KeyF') && this.mode === 'onfoot') {
       this.mode = 'fly'
       this.player.enabled = false
@@ -367,9 +420,22 @@ export class Game {
         const taxi = boardable.role === 'taxi'
         this.hud.setPrompt(taxi ? '<kbd>E</kbd>Get in the taxi <span style="opacity:.7">— the rear door opens by itself</span>' : `<kbd>E</kbd>Board the bus <span style="opacity:.7">¥210 · IC card</span>`)
         if (input.hit('KeyE')) this.board(boardable)
+      } else if (car) {
+        this.hud.setPrompt(`<kbd>E</kbd>Drive the ${car.spec.label} <span style="opacity:.7">${car.spec.labelJa}</span>`)
+        if (input.hit('KeyE')) this.enterVehicle(car)
       } else {
-        this.hud.setPrompt(car ? `<kbd>E</kbd>Drive the ${car.spec.label} <span style="opacity:.7">${car.spec.labelJa}</span>` : null)
-        if (car && input.hit('KeyE')) this.enterVehicle(car)
+        this.stationTimer -= dt
+        if (this.stationTimer <= 0) {
+          this.stationTimer = 0.5
+          const g = this.world.geodeticFromWorld(feet)
+          this.nearStation = this.rail.stationNear(g.lat, g.lon)
+        }
+        const st = this.nearStation
+        this.hud.setPrompt(st ? `<kbd>E</kbd>Enter <b>${st.ja}駅</b> <span style="opacity:.75">${st.en ? st.en + ' Station' : ''} · trains, subway, Shinkansen</span>` : null)
+        if (st && input.hit('KeyE')) {
+          document.exitPointerLock?.()
+          this.stationPanel.show(st)
+        }
       }
       if (input.hit('KeyH')) {
         this.hailed = this.traffic.hailTaxi(feet)
@@ -409,6 +475,8 @@ export class Game {
         this.vehicles.update(dt, pos)
         this.maybeRebase(pos)
       }
+    } else if (this.mode === 'train' && this.rail.active) {
+      this.updateTrain(dt, input)
     } else if (this.mode === 'passenger' && this.ride) {
       this.updateRide(dt, input)
     } else if (this.mode === 'fly') {
@@ -416,8 +484,8 @@ export class Game {
       this.maybeRebase(cam.position)
     }
 
-    if (this.mode === 'onfoot' || this.mode === 'driving' || this.mode === 'passenger') {
-      const focus = this.mode === 'driving' && this.vehicles.current ? this.vehicles.current.position : this.ride ? this.ride.car.pos : this.player.feet
+    if (this.mode === 'onfoot' || this.mode === 'driving' || this.mode === 'passenger' || this.mode === 'train') {
+      const focus = this.mode === 'train' ? cam.position : this.mode === 'driving' && this.vehicles.current ? this.vehicles.current.position : this.ride ? this.ride.car.pos : this.player.feet
       this.traffic.playerPos = this.mode === 'onfoot' ? this.player.feet : null
       this.traffic.playerCar = this.mode === 'driving' && this.vehicles.current ? { pos: this.vehicles.current.position, length: this.vehicles.current.spec.length } : null
       this.traffic.update(dt, focus, this.clock.jst.hourFloat)
@@ -440,6 +508,81 @@ export class Game {
   }
 
   private lookIdle = 0
+
+  private boardTrain(route: import('../transit/RailNetwork').Route): void {
+    // Tap in: Japanese gates need at least the minimum fare on the card.
+    if (this.wallet.ic < 150) {
+      this.hud.toast('Your IC card balance is too low for the gate — charge it first.')
+      return
+    }
+    this.stationPanel.hide()
+    this.hud.setPrompt(null)
+    this.hud.toast('ピッ — through the ticket gate. Head for the platform…', 2500)
+    this.mode = 'train'
+    this.player.enabled = false
+    this.player.object.visible = false
+    this.player.body?.setEnabled(false)
+    if (this.vehicles.current) this.vehicles.exit()
+    this.rail.view = 'seat'
+    this.trainBaseYaw = null
+    this.rail.begin(route)
+    this.updateHints()
+  }
+
+  private updateTrain(dt: number, input: import('../player/Input').Input): void {
+    this.rail.update(dt, {
+      skip: input.hit('KeyT') && !input.isDown('ShiftLeft') && !input.isDown('ShiftRight'),
+      skipAll: input.hit('KeyT') && (input.isDown('ShiftLeft') || input.isDown('ShiftRight')),
+      exit: input.hit('KeyE'),
+      view: input.hit('KeyV'),
+    })
+    const t = this.rail.cameraTarget()
+    if (!t) return
+    // The view turns with the train; mouse-look is an offset on top.
+    const base = Math.atan2(-t.forward.x, -t.forward.z)
+    if (this.trainBaseYaw === null || this.rail.view !== this.lastTrainView) {
+      this.rig.yaw = base
+      this.rig.pitch = this.rail.view === 'outside' ? -0.18 : -0.05
+      this.lastTrainView = this.rail.view
+    } else {
+      let d = base - this.trainBaseYaw
+      while (d > Math.PI) d -= Math.PI * 2
+      while (d < -Math.PI) d += Math.PI * 2
+      this.rig.yaw += d
+    }
+    this.trainBaseYaw = base
+    this.rig.mode = t.first ? 'first' : 'third'
+    this.rig.update(dt, { pivot: t.pivot, speed: 0, stepHz: 0, distance: t.distance, shoulder: 0 })
+    this.hud.setSpeed(null)
+    this.pipeline.indoor += ((this.rail.run?.underground ? 1 : 0) - this.pipeline.indoor) * Math.min(1, dt * 1.5)
+    this.maybeRebase(t.pivot)
+  }
+
+  private lastTrainView = ''
+
+  /** Debug/test: board the fastest route between two stations by name. */
+  debugRide(from: string, to: string, view: 'seat' | 'cab' | 'outside' = 'seat'): string {
+    const net = this.rail.net
+    if (!net) return 'no network'
+    const a = net.search(from, 1)[0]
+    const b = net.search(to, 1)[0]
+    const r = a && b ? net.route(a.id, b.id) : null
+    if (!r) return 'no route'
+    this.boardTrain(r)
+    this.rail.view = view
+    return r.legs.map((l) => `${l.line.ja} ${net.stations[l.stations[0]].ja}→${net.stations[l.stations[l.stations.length - 1]].ja}`).join(' / ')
+  }
+
+  private async leaveTrain(st: Station): Promise<void> {
+    this.pipeline.indoor = 0
+    this.mode = 'loading'
+    this.player.body?.setEnabled(true)
+    this.player.object.visible = true
+    this.rig.mode = 'third'
+    await this.spawnPlayer(st.lat, st.lon)
+    this.hud.showPlace({ kanji: st.ja + '駅', reading: st.kana, romaji: st.en ? st.en + ' Station' : '', sub: this.rail.net?.lines[st.line].ja })
+    this.updateHints()
+  }
 
   /** A stopped bus or a hailed, stopped taxi right next to the player. */
   private boardable(feet: Vector3): AICar | null {

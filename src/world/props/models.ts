@@ -28,24 +28,24 @@ export interface PropModel {
   castShadow: boolean
 }
 
-function colored(g: BufferGeometry, color: number | Color, group = 0): BufferGeometry {
+export function colored(g: BufferGeometry, color: number | Color, group = 0): BufferGeometry {
   const c = new Color(color)
+  g = g.index ? g.toNonIndexed() : g
   const n = g.getAttribute('position').count
   const col = new Float32Array(n * 3)
   for (let i = 0; i < n; i++) col.set([c.r, c.g, c.b], i * 3)
-  g = g.index ? g.toNonIndexed() : g
-  g.setAttribute('color', new BufferAttribute(col.slice(0, g.getAttribute('position').count * 3), 3))
+  g.setAttribute('color', new BufferAttribute(col, 3))
   g.userData.group = group
   return g
 }
 
-function at(g: BufferGeometry, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): BufferGeometry {
+export function at(g: BufferGeometry, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): BufferGeometry {
   const m = new Matrix4().compose(new Vector3(x, y, z), new Quaternion().setFromEuler(new Euler(rx, ry, rz)), new Vector3(1, 1, 1))
   return g.applyMatrix4(m)
 }
 
 /** Merge parts, creating one draw group per material slot. */
-function assemble(parts: BufferGeometry[]): BufferGeometry {
+export function assemble(parts: BufferGeometry[]): BufferGeometry {
   const clean = parts.map((p) => {
     const g = p.index ? p.toNonIndexed() : p
     for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv', 'color'].includes(k)) g.deleteAttribute(k)
@@ -72,7 +72,7 @@ const vc = (params: ConstructorParameters<typeof MeshStandardMaterial>[0] = {}) 
 
 // ----------------------------------------------------------- canvas textures
 
-function canvasTex(w: number, h: number, draw: (c: CanvasRenderingContext2D) => void): CanvasTexture {
+export function canvasTex(w: number, h: number, draw: (c: CanvasRenderingContext2D) => void): CanvasTexture {
   const cv = document.createElement('canvas')
   cv.width = w
   cv.height = h

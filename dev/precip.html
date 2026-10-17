@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Precip</title><style>html,body{margin:0;background:#000;overflow:hidden}</style></head>
+<body><script type="module">
+import * as THREE from 'three'
+import { Precipitation } from '/src/weather/Precipitation.ts'
+const q = new URLSearchParams(location.search)
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, logarithmicDepthBuffer: q.has('log') })
+renderer.setSize(innerWidth, innerHeight)
+document.body.appendChild(renderer.domElement)
+const scene = new THREE.Scene()
+scene.background = new THREE.Color(0x203040)
+const p = new Precipitation(8000)
+scene.add(p.mesh)
+const snow = q.has('snow')
+p.update(0.5, snow ? 0 : 6, snow ? 2 : 0, new THREE.Vector3(1, 0, 0), 1, 8000)
+const cam = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 1000)
+cam.position.set(0, 2, 0); cam.lookAt(0, 2, -10)
+renderer.render(scene, cam)
+const gl = renderer.getContext()
+window.vs = renderer.info.programs.map(pr => pr.name)
+const px = new Uint8Array(4); gl.readPixels(500, 300, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); window.px = Array.from(px)
+console.warn('programs', JSON.stringify(window.vs), 'drawRange', p.mesh.geometry.drawRange.count, 'visible', p.mesh.visible)
+window.ready = true
+window.err = renderer.info.programs?.length
+</script></body></html>

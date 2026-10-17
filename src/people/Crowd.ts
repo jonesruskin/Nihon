@@ -2,7 +2,22 @@
 // sidewalks and footpaths of the loaded OSM streets (keeping left, varying
 // pace, pausing, avoiding each other), and are drawn as GPU-instanced,
 // vertex-animated MakeHuman people with per-person clothing colours.
-import { BufferAttribute, BufferGeometry, Group, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Quaternion, Vector3 } from 'three'
+import {
+  BufferAttribute,
+  BufferGeometry,
+  Color,
+  CylinderGeometry,
+  DoubleSide,
+  Group,
+  InstancedMesh,
+  Matrix4,
+  Mesh,
+  MeshStandardMaterial,
+  Quaternion,
+  SphereGeometry,
+  Vector3,
+} from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { NavPath } from '../world/vector/build'
 import { createCrowdMesh, crowdTime, loadCrowdArchetypes, type CrowdArchetype } from './crowdModels'
 
@@ -46,6 +61,22 @@ interface Ped {
   pos: Vector3
   yaw: number
   phase: number
+  umbrella: number // 0 none, 1 clear vinyl, 2 coloured
+  umbrellaColor: number
+}
+
+function umbrellaGeometry(): BufferGeometry {
+  // Canopy (shallow dome, 8 ribs), shaft and J handle; origin at the hand.
+  const canopy = new SphereGeometry(0.55, 8, 4, 0, Math.PI * 2, 0, Math.PI * 0.32)
+  canopy.scale(1, 0.55, 1)
+  canopy.translate(0, 0.62, 0)
+  const shaft = new CylinderGeometry(0.007, 0.007, 0.95, 5)
+  shaft.translate(0, 0.45, 0)
+  const handle = new CylinderGeometry(0.012, 0.012, 0.12, 5)
+  handle.translate(0, -0.03, 0)
+  const parts = [canopy, shaft, handle].map((g) => (g.index ? g.toNonIndexed() : g))
+  for (const g of parts) g.deleteAttribute('uv')
+  return mergeGeometries(parts)!
 }
 
 const SIDEWALK: Record<string, number> = { trunk: 3, primary: 3, secondary: 2.5, tertiary: 2 }
@@ -78,10 +109,25 @@ export class Crowd {
   target = 0
   ready = false
   private grid = new Map<string, Ped[]>()
+  /** 0..1 how hard it is raining (umbrellas up, people hurry). */
+  rain = 0
+  private umbrellaClear!: InstancedMesh
+  private umbrellaSolid!: InstancedMesh
 
   async init(capacityPerArchetype = 120): Promise<void> {
     this.stripes.receiveShadow = true
     this.root.add(this.stripes)
+    const ug = umbrellaGeometry()
+    const cap = capacityPerArchetype * 8
+    // ビニール傘: the clear vinyl umbrella sold at every konbini.
+    this.umbrellaClear = new InstancedMesh(ug, new MeshStandardMaterial({ color: 0xf4f8fa, roughness: 0.15, transparent: true, opacity: 0.32, side: DoubleSide, depthWrite: false }), cap)
+    this.umbrellaSolid = new InstancedMesh(ug, new MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, side: DoubleSide }), cap)
+    for (const u of [this.umbrellaClear, this.umbrellaSolid]) {
+      u.count = 0
+      u.frustumCulled = false
+      u.castShadow = u === this.umbrellaSolid
+      this.root.add(u)
+    }
     this.arch = await loadCrowdArchetypes()
     for (const a of this.arch) {
       const m = createCrowdMesh(a, capacityPerArchetype)
@@ -378,6 +424,8 @@ export class Crowd {
         pos: p,
         yaw: 0,
         phase: Math.random(),
+        umbrella: Math.random() < 0.08 ? 0 : Math.random() < 0.6 ? 1 : 2,
+        umbrellaColor: [0x15161a, 0x1b2540, 0x3a3f46, 0x5a1d22, 0x2d4a3a, 0x7a6a55][Math.floor(Math.random() * 6)],
       }
       list.push(ped)
       this.peds.push(ped)
@@ -524,7 +572,7 @@ export class Crowd {
           p.timer = 20 + Math.random() * 60
         }
       } else if (p.state === 'walk') {
-        let want = 1.32 * p.pace * (e.scramble >= 0 ? 1.15 : 1)
+        let want = 1.32 * p.pace * (e.scramble >= 0 ? 1.15 : 1) * (1 + this.rain * 0.12)
         // Caught on the crossing when the lights change: hurry.
         if (e.scramble >= 0 && this.scrambles[e.scramble].walkTime() < 0) want = 2.3 * p.pace
         // Slow down behind someone walking the same way; sidestep oncoming people.
@@ -572,6 +620,30 @@ export class Crowd {
       const laneGoal = e2.scramble >= 0 ? (p.phase - 0.5) * e2.width : (0.2 + p.phase * 0.3) * e2.width * 0.5
       p.lane += (laneGoal - p.lane) * Math.min(1, dt * 0.3)
     }
+    // Umbrellas up in the rain (Japan: even in a light drizzle).
+    let nc = 0
+    let ns = 0
+    if (this.rain > 0.08) {
+      const col = new Color()
+      for (const p of this.peds) {
+        if (!p.umbrella) continue
+        const right = new Vector3(Math.cos(p.yaw), 0, -Math.sin(p.yaw))
+        const at = new Vector3(p.pos.x + right.x * 0.18 + Math.sin(p.yaw) * 0.12, p.pos.y + 1.12, p.pos.z + right.z * 0.18 + Math.cos(p.yaw) * 0.12)
+        this.q.setFromAxisAngle(this.up, p.yaw)
+        this.m4.compose(at, this.q, this.one)
+        if (p.umbrella === 1) this.umbrellaClear.setMatrixAt(nc++, this.m4)
+        else {
+          this.umbrellaSolid.setMatrixAt(ns, this.m4)
+          this.umbrellaSolid.setColorAt(ns++, col.setHex(p.umbrellaColor))
+        }
+      }
+    }
+    this.umbrellaClear.count = nc
+    this.umbrellaSolid.count = ns
+    this.umbrellaClear.instanceMatrix.needsUpdate = true
+    this.umbrellaSolid.instanceMatrix.needsUpdate = true
+    if (this.umbrellaSolid.instanceColor) this.umbrellaSolid.instanceColor.needsUpdate = true
+
     // Write instances.
     for (let ai = 0; ai < this.meshes.length; ai++) {
       const mesh = this.meshes[ai]

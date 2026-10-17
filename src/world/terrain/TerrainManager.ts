@@ -1,5 +1,6 @@
 // Quadtree terrain streamed from GSI elevation + GSI aerial photographs.
 // Each tile is a real photo of that patch of Japan draped on real terrain.
+import { buildingUniforms } from '../../render/materials/building'
 import {
   BufferAttribute,
   BufferGeometry,
@@ -310,6 +311,7 @@ export class TerrainManager {
       const size = tileSizeMeters(id)
       const geom = buildGeometry(id, grid, frame, Math.max(4, size * 0.015))
       const mat = new MeshStandardMaterial({ roughness: 0.93, metalness: 0, color: photo ? 0xffffff : 0x3d5a40 })
+      patchGroundWeather(mat)
       if (photo) {
         const tex = new Texture(photo)
         tex.colorSpace = SRGBColorSpace
@@ -384,3 +386,25 @@ export class TerrainManager {
 }
 
 export { GRID_INDICES }
+
+/** Snow settles on the land (flat ground first), rain darkens it. */
+function patchGroundWeather(mat: MeshStandardMaterial): void {
+  mat.customProgramCacheKey = () => 'nihon-ground-v1'
+  mat.onBeforeCompile = (s) => {
+    s.uniforms.uSnow = buildingUniforms.uSnow
+    s.uniforms.uWet = buildingUniforms.uWet
+    s.vertexShader = s.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vUpness;')
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvUpness = normalize(mat3(modelMatrix) * objectNormal).y;')
+    s.fragmentShader = s.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uSnow; uniform float uWet; varying float vUpness;')
+      .replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+        float lum = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+        diffuseColor.rgb *= mix(1.0, 0.72, uWet);
+        float flat = smoothstep(0.75, 0.93, vUpness);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.88, 0.9) * (0.82 + 0.25 * lum), uSnow * flat * 0.92);`,
+      )
+  }
+}

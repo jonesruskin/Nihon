@@ -65,10 +65,19 @@ class SanitizeEffect extends Effect {
       `uniform mat4 uInvViewProj;
       uniform vec3 uCamPos;
       uniform vec3 uGlow;
+      uniform float uFog;
+      uniform vec3 uFogColor;
+      uniform float uFar;
       void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
         vec3 c = inputColor.rgb;
         bool bad = any(isnan(c)) || any(isinf(c));
         c = bad ? vec3(0.0) : clamp(c, vec3(0.0), vec3(64.0));
+        // Fog / rain haze (postprocessing hands us perspective depth).
+        if (uFog > 0.0) {
+          float dist = depth >= 0.99999 ? 1e6 : -getViewZ(depth);
+          float f = 1.0 - exp(-dist * uFog);
+          c = mix(c, uFogColor, depth >= 0.99999 ? f * 0.85 : f);
+        }
         if (depth >= 0.99999 && dot(uGlow, uGlow) > 0.0) {
           vec4 w = uInvViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
           vec3 dir = normalize(w.xyz / w.w - uCamPos);
@@ -83,6 +92,9 @@ class SanitizeEffect extends Effect {
           ['uInvViewProj', new Uniform(new Matrix4())],
           ['uCamPos', new Uniform(new Vector3())],
           ['uGlow', new Uniform(new Vector3())],
+          ['uFog', new Uniform(0)],
+          ['uFogColor', new Uniform(new Vector3())],
+          ['uFar', new Uniform(400000)],
         ]),
       },
     )
@@ -113,6 +125,8 @@ export class RenderPipeline {
   private bloom: BloomEffect
   private sanitize = new SanitizeEffect()
   readonly lights: NightLights
+  /** Fog extinction per metre (0 = clear air beyond the atmosphere model). */
+  fogDensity = 0
   /** 0 outdoors .. 1 underground (tunnels, subway): no sun or sky light. */
   indoor = 0
   /** 0 day .. 1 night; set by the game each frame (drives lights + glow). */
@@ -359,6 +373,12 @@ export class RenderPipeline {
     ;(su.get('uGlow')!.value as Vector3).set(g * 1.0, g * 0.78, g * 0.6)
     ;(su.get('uCamPos')!.value as Vector3).copy(this.camera.position)
     ;(su.get('uInvViewProj')!.value as Matrix4).multiplyMatrices(this.camera.matrixWorld, this.camera.projectionMatrixInverse)
+    su.get('uFog')!.value = this.fogDensity * (1 - this.indoor)
+    su.get('uFar')!.value = this.camera.far
+    // Fog takes the colour of the diffuse daylight (or the city glow at night).
+    const day = Math.max(0, Math.min(1, (this.sunElevation() + 4) / 14))
+    const fl = 0.02 + 0.55 * day * (1 - this.overcast * 0.45)
+    ;(su.get('uFogColor')!.value as Vector3).set(fl * 0.92 + g * 1.5, fl * 0.95 + g * 1.2, fl + g)
   }
 
   private exposure = 3

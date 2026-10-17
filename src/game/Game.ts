@@ -28,6 +28,7 @@ import { Crowd } from '../people/Crowd'
 import { PopulationGrid, pedestriansPerHectare } from '../people/density'
 import { DESTINATIONS } from '../data/places'
 import { SCRAMBLES, scrambleWalkTime } from '../people/scramble'
+import { WeatherSystem, type WeatherPreset } from '../weather/WeatherSystem'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
 
@@ -97,6 +98,7 @@ export class Game {
   readonly rail: RailRide
   readonly stationPanel: StationPanel
   readonly crowd = new Crowd()
+  readonly weather = new WeatherSystem()
   private population: PopulationGrid | null = null
   private crowdTimer = 0
   private crowdTarget = 0
@@ -138,7 +140,9 @@ export class Game {
     this.player = new Player(this.physics)
     this.rig = new CameraRig(this.pipeline.camera, this.physics)
     const scene = this.pipeline.scene
-    scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root, this.traffic.root, this.crowd.root)
+    scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root, this.traffic.root, this.crowd.root, this.weather.precip.mesh)
+    const wp = new URLSearchParams(location.search).get('weather')
+    if (wp) this.weather.preset = wp as WeatherPreset
     this.map = new MapView(ui, {
       travel: (lat, lon, heading, dest) => void this.travelTo(lat, lon, heading, dest),
       setDestination: (lat, lon, label) => {
@@ -292,6 +296,7 @@ export class Game {
     const c = { low: [75, 70], medium: [100, 170], high: [120, 320], ultra: [150, 520] }[q]
     this.crowd.maxRadius = this.crowd.radius = c[0]
     this.crowd.cap = c[1]
+    this.weather.budget = { low: 3000, medium: 6000, high: 10000, ultra: 16000 }[q]
     const t = {
       low: { far: 30_000, split: 1.3, near: 800, vfar: 1300, err: 48 },
       medium: { far: 60_000, split: 1.5, near: 1200, vfar: 2000, err: 32 },
@@ -524,6 +529,13 @@ export class Game {
     const focus = this.mode === 'onfoot' && this.player.body ? this.player.feet : cam.position
     const night = nightFactorFromSun(this.pipeline.sunElevation())
     this.pipeline.night = night
+    {
+      const g = this.world.geodeticFromWorld(cam.position)
+      const ground = this.terrain.heightAt(g.lat, g.lon)
+      this.weather.update(dt, g.lat, g.lon, Number.isFinite(ground) ? ground : 0, this.clock.date, this.pipeline)
+      this.weather.precip.mesh.visible &&= this.pipeline.indoor < 0.5
+      this.crowd.rain = this.weather.rainFactor
+    }
     this.pipeline.update(dt, focus)
     updateWater(this.elapsed)
     buildingUniforms.uNight.value = night
@@ -566,7 +578,7 @@ export class Game {
         stations,
         hour: j.hourFloat,
         weekend: j.weekday === 0 || j.weekday === 6,
-        rain: 0,
+        rain: this.weather.rainFactor,
         hotspot,
       })
     }
@@ -903,7 +915,7 @@ export class Game {
     const j = this.clock.jst
     const pad = (n: number) => String(n).padStart(2, '0')
     const wd = ['日', '月', '火', '水', '木', '金', '土'][j.weekday]
-    this.hud.setClock(`${j.month}月${j.day}日(${wd})  ${pad(j.hour)}:${pad(j.minute)} JST`)
+    this.hud.setClock(`${j.month}月${j.day}日(${wd})  ${pad(j.hour)}:${pad(j.minute)} JST   ${this.weather.label()}`)
     this.hud.setCompass(this.rig.yaw)
     this.placeTimer += dt
     if (this.placeTimer > 1.5 && this.mode !== 'loading') {

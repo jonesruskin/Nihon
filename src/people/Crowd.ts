@@ -43,8 +43,14 @@ export interface CrowdScramble {
   pedPhase: number
 }
 
+export type CrowdPed = Ped
+
 interface Ped {
   arch: number
+  archetypeName: string
+  near: boolean // drawn by NearPeople with the full model
+  tint: [number, number, number, number]
+  tint2: [number, number, number, number]
   slot: number
   edge: number
   t: number
@@ -406,8 +412,16 @@ export class Crowd {
       if (list.length >= mesh.instanceMatrix.count) continue
       const pace = 0.82 + Math.random() * 0.36
       const elder = this.arch[ai].age > 0.62
+      const top = TOPS[Math.floor(Math.random() * TOPS.length)]
+      const bot = BOTTOMS[Math.floor(Math.random() * BOTTOMS.length)]
+      const tintA: [number, number, number, number] = [top[0], top[1], top[2], Math.random() < 0.15 ? 0 : 0.9]
+      const tintB: [number, number, number, number] = [bot[0], bot[1], bot[2], 0.03 + Math.random() * 0.05]
       const ped: Ped = {
         arch: ai,
+        archetypeName: this.arch[ai].name,
+        near: false,
+        tint: tintA,
+        tint2: tintB,
         slot: list.length,
         edge: ei,
         t,
@@ -432,10 +446,8 @@ export class Crowd {
       mesh.count = list.length
       const tint = mesh.geometry.getAttribute('aTint')
       const tint2 = mesh.geometry.getAttribute('aTint2')
-      const top = TOPS[Math.floor(Math.random() * TOPS.length)]
-      const bot = BOTTOMS[Math.floor(Math.random() * BOTTOMS.length)]
-      tint.setXYZW(ped.slot, top[0], top[1], top[2], Math.random() < 0.15 ? 0 : 0.9)
-      tint2.setXYZW(ped.slot, bot[0], bot[1], bot[2], 0.03 + Math.random() * 0.05)
+      tint.setXYZW(ped.slot, ...tintA)
+      tint2.setXYZW(ped.slot, ...tintB)
       tint.needsUpdate = tint2.needsUpdate = true
       return true
     }
@@ -494,6 +506,15 @@ export class Crowd {
   private q = new Quaternion()
   private up = new Vector3(0, 1, 0)
   private one = new Vector3(1, 1, 1)
+  private zero = new Vector3(0, 0, 0)
+
+  /** Pedestrians nearest to a point (for the full-detail near LOD). */
+  nearest(p: Vector3, n: number): Ped[] {
+    return this.peds
+      .filter((q) => Math.abs(q.pos.x - p.x) < 15 && Math.abs(q.pos.z - p.z) < 15)
+      .sort((a, b) => a.pos.distanceToSquared(p) - b.pos.distanceToSquared(p))
+      .slice(0, n)
+  }
 
   /**
    * @param perHectare real pedestrian density here. When it exceeds what the
@@ -653,7 +674,7 @@ export class Crowd {
       const fr = this.arch[ai].frames
       for (const p of list) {
         this.q.setFromAxisAngle(this.up, p.yaw)
-        mesh.setMatrixAt(p.slot, this.m4.compose(p.pos, this.q, this.one))
+        mesh.setMatrixAt(p.slot, this.m4.compose(p.pos, this.q, p.near ? this.zero : this.one))
         const walking = p.speed > 0.25
         const clip = walking ? fr.walk : fr.idle
         // Cycle rate matches ground speed so feet don't slide (clip ~1.1 s at 1.35 m/s).

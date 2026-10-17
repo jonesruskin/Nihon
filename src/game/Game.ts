@@ -35,6 +35,7 @@ import { ActivityPanel, SpotIndex, spotPrompt, type Spot } from '../tourism/Acti
 import { Phone } from '../ui/Phone'
 import { Soundscape } from '../audio/Soundscape'
 import { PlacedProps } from '../world/props/PlacedProps'
+import { NearPeople } from '../people/NearPeople'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
 
@@ -115,6 +116,7 @@ export class Game {
   readonly phone: Phone
   readonly sound = new Soundscape()
   readonly placed = new PlacedProps()
+  readonly nearPeople: NearPeople
   private placedTimer = 0
   private nearSpot: Spot | null = null
   private purchases = 0
@@ -150,6 +152,7 @@ export class Game {
     readonly ui: HTMLDivElement,
   ) {
     this.hud = new Hud(ui)
+    this.nearPeople = new NearPeople(this.characters)
     this.pipeline = new RenderPipeline(canvas, this.world)
     this.terrain = new TerrainManager(this.world)
     this.plateau = new PlateauManager(this.world, this.pipeline.camera, this.pipeline.renderer)
@@ -162,7 +165,7 @@ export class Game {
     this.player = new Player(this.physics)
     this.rig = new CameraRig(this.pipeline.camera, this.physics)
     const scene = this.pipeline.scene
-    scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root, this.traffic.root, this.crowd.root, this.weather.precip.mesh, this.placed.root)
+    scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root, this.traffic.root, this.crowd.root, this.weather.precip.mesh, this.placed.root, this.nearPeople.root)
     const wp = new URLSearchParams(location.search).get('weather')
     if (wp) this.weather.preset = wp as WeatherPreset
     this.map = new MapView(ui, {
@@ -383,6 +386,7 @@ export class Game {
     if (this.rail) this.rail.maxAmbient = { low: 2, medium: 3, high: 5, ultra: 7 }[q]
     const c = { low: [75, 70], medium: [100, 170], high: [120, 320], ultra: [150, 520] }[q]
     this.crowd.maxRadius = this.crowd.radius = c[0]
+    if (this.nearPeople) this.nearPeople.max = { low: 2, medium: 4, high: 6, ultra: 10 }[q]
     this.crowd.cap = c[1]
     this.weather.budget = { low: 3000, medium: 6000, high: 10000, ultra: 16000 }[q]
     const t = {
@@ -825,6 +829,7 @@ export class Game {
     }
     this.crowd.update(dt, at, this.pedDensity, this.elapsed)
     this.crowdTarget = this.crowd.target
+    if (this.nearPeople.max > 0) this.nearPeople.update(dt, this.pipeline.camera.position, this.crowd.nearest(this.pipeline.camera.position, this.nearPeople.max + 2))
   }
 
   private stationModes(st: Station): string {

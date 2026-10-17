@@ -29,6 +29,11 @@ import { PopulationGrid, pedestriansPerHectare } from '../people/density'
 import { DESTINATIONS } from '../data/places'
 import { SCRAMBLES, scrambleWalkTime } from '../people/scramble'
 import { WeatherSystem, type WeatherPreset } from '../weather/WeatherSystem'
+import { seasonUniforms } from '../world/props/models'
+import { Journal } from '../tourism/Journal'
+import { ActivityPanel, SpotIndex, spotPrompt, type Spot } from '../tourism/Activities'
+import { Phone } from '../ui/Phone'
+import { Soundscape } from '../audio/Soundscape'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
 
@@ -77,6 +82,10 @@ function readParams(): StartParams {
 
 const REBASE_DISTANCE = 2500
 
+function seasonNow(k: 'bloom' | 'autumn'): number {
+  return k === 'bloom' ? seasonUniforms.uBloom.value : seasonUniforms.uAutumn.value
+}
+
 export class Game {
   readonly params = readParams()
   readonly world = new WorldFrame(this.params.lat, this.params.lon)
@@ -99,12 +108,22 @@ export class Game {
   readonly stationPanel: StationPanel
   readonly crowd = new Crowd()
   readonly weather = new WeatherSystem()
+  readonly journal = new Journal()
+  readonly spots = new SpotIndex()
+  readonly activity: ActivityPanel
+  readonly phone: Phone
+  readonly sound = new Soundscape()
+  private nearSpot: Spot | null = null
+  private purchases = 0
+  private discoverTimer = 0
+  private rideTime = 0
   private population: PopulationGrid | null = null
   private crowdTimer = 0
   private crowdTarget = 0
   /** Pedestrians per hectare right here, right now (debug/HUD). */
   pedDensity = 0
   private nearStation: Station | null = null
+  private liveTime = !new URLSearchParams(location.search).has('t')
   private stationTimer = 0
   private trainBaseYaw: number | null = null
   /** Money: cash and a Suica-style IC card. */
@@ -166,6 +185,7 @@ export class Game {
       payIC: (yen) => this.pay(yen, 'ic'),
       finish: (st) => void this.leaveTrain(st),
       veil: (text) => (text ? this.hud.showLoading(text) : this.hud.hideLoading()),
+      sound: (n) => this.sound.play(n),
       worldReadyAt: (p) => {
         const g = this.world.geodeticFromWorld(p)
         return this.terrain.isDetailedAt(g.lat, g.lon) && this.vector.pending === 0
@@ -190,6 +210,64 @@ export class Game {
         return { lat: g.lat, lon: g.lon }
       },
     })
+    this.journal.onDiscover = (_id, d) => this.hud.showDiscovery(d)
+    this.journal.today = () => {
+      const j = this.clock.jst
+      return `${j.year}-${String(j.month).padStart(2, '0')}-${String(j.day).padStart(2, '0')}`
+    }
+    this.activity = new ActivityPanel(ui, {
+      wallet: () => this.wallet,
+      pay: (yen, method) => {
+        const ok = this.pay(yen, method)
+        if (ok && ++this.purchases === 3) this.journal.discover('bins')
+        return ok
+      },
+      addCash: (yen) => (this.wallet.cash += yen),
+      toast: (html, ms) => this.hud.toast(html, ms),
+      journal: this.journal,
+      hour: () => this.clock.jst.hourFloat,
+      temperature: () => this.weather.now.temp,
+      raining: () => this.weather.now.rain > 0.2,
+      passTime: (min) => this.clock.advance(min * 60),
+      sleepUntilMorning: () => {
+        const j = this.clock.jst
+        const next = fromJst(j.year, j.month, j.day, 7, 0)
+        this.clock.set(new Date(next.getTime() + (j.hourFloat >= 7 ? 86400e3 : 0)))
+      },
+      sound: (n) => this.sound.play(n),
+    })
+    this.phone = new Phone(ui, {
+      wallet: () => this.wallet,
+      journal: this.journal,
+      setHour: (h) => {
+        const j = this.clock.jst
+        this.clock.set(fromJst(j.year, j.month, j.day, Math.floor(h), Math.round((h % 1) * 60)))
+        this.liveTime = false
+      },
+      setMonth: (m) => {
+        const j = this.clock.jst
+        this.clock.set(fromJst(j.year, m, Math.min(j.day, 28), j.hour, j.minute))
+        this.liveTime = false
+      },
+      setLive: () => {
+        this.clock.set(new Date())
+        this.weather.preset = 'live'
+        this.liveTime = true
+      },
+      setWeather: (w) => (this.weather.preset = w),
+      setQuality: (q) => {
+        this.params.quality = q
+        this.applyQuality(q)
+      },
+      status: () => ({ hour: this.clock.jst.hourFloat, month: this.clock.jst.month, weather: this.weather.preset, quality: this.params.quality, live: this.liveTime }),
+    })
+    const startAudio = () => {
+      this.sound.start()
+      window.removeEventListener('pointerdown', startAudio)
+      window.removeEventListener('keydown', startAudio)
+    }
+    window.addEventListener('pointerdown', startAudio)
+    window.addEventListener('keydown', startAudio)
     this.placeScrambles()
     this.traffic.graph.allRed = (pos) =>
       this.crowd.scrambles.some((sc) => sc.walkTime() >= 0 && Math.hypot(pos.x - sc.center.x, pos.z - sc.center.z) < sc.radius + 18)
@@ -198,6 +276,7 @@ export class Game {
       this.placeScrambles()
       this.rail.snap.invalidate()
       this.crowd.rebase(delta)
+      this.spots.invalidate()
       this.pipeline.scene.updateMatrixWorld(true)
       this.physics.syncStatics()
       if (this.player.body) this.player.rebase(delta)
@@ -406,8 +485,18 @@ export class Game {
       this.map.toggle()
       if (this.map.open) document.exitPointerLock?.()
     }
-    input.enabled = !this.map.open && !this.stationPanel.open && this.mode !== 'loading'
-    if (this.stationPanel.open && input.hitAlways('Escape')) this.stationPanel.hide()
+    if (input.hitAlways('Tab')) {
+      this.phone.toggle()
+      if (this.phone.open) document.exitPointerLock?.()
+    }
+    if (input.hitAlways('KeyP') && !this.stationPanel.open && !this.activity.open) document.body.classList.toggle('photo-mode')
+    if (document.body.classList.contains('photo-mode') && input.hitAlways('Space')) this.snapPhoto()
+    input.enabled = !this.map.open && !this.stationPanel.open && !this.activity.open && !this.phone.open && this.mode !== 'loading'
+    if (input.hitAlways('Escape')) {
+      this.stationPanel.hide()
+      this.activity.hide()
+      if (this.phone.open) this.phone.toggle()
+    }
     if (input.hit('KeyF') && this.mode === 'onfoot') {
       this.mode = 'fly'
       this.player.enabled = false
@@ -455,15 +544,28 @@ export class Game {
       } else {
         this.stationTimer -= dt
         if (this.stationTimer <= 0) {
-          this.stationTimer = 0.5
+          this.stationTimer = 0.4
           const g = this.world.geodeticFromWorld(feet)
           this.nearStation = this.rail.stationNear(g.lat, g.lon)
+          this.spots.update(this.vector.readyTiles)
+          this.nearSpot = this.spots.nearest(feet)
         }
         const st = this.nearStation
-        this.hud.setPrompt(st ? `<kbd>E</kbd>Enter <b>${st.ja}駅</b> <span style="opacity:.75">${st.en ? st.en + ' Station' : ''} · ${this.stationModes(st)}</span>` : null)
-        if (st && input.hit('KeyE')) {
-          document.exitPointerLock?.()
-          this.stationPanel.show(st)
+        const spot = this.nearSpot
+        // A spot right here (vending machine, shop door) wins over the station nearby.
+        if (spot && (!st || spot.kind === 'vending' || Math.hypot(spot.pos.x - feet.x, spot.pos.z - feet.z) < 10)) {
+          this.hud.setPrompt(spotPrompt(spot))
+          if (input.hit('KeyE')) {
+            document.exitPointerLock?.()
+            this.activity.show(spot)
+          }
+        } else {
+          this.hud.setPrompt(st ? `<kbd>E</kbd>Enter <b>${st.ja}駅</b> <span style="opacity:.75">${st.en ? st.en + ' Station' : ''} · ${this.stationModes(st)}</span>` : null)
+          if (st && input.hit('KeyE')) {
+            document.exitPointerLock?.()
+            this.stationPanel.show(st)
+            this.collectStationStamp(st)
+          }
         }
       }
       if (input.hit('KeyH')) {
@@ -540,12 +642,89 @@ export class Game {
     updateWater(this.elapsed)
     buildingUniforms.uNight.value = night
     buildingUniforms.uTime.value = this.elapsed
+    this.updateDiscoveries(dt)
+    this.updateSound(dt)
+    if (this.liveTime && Math.abs(this.clock.date.getTime() - Date.now()) > 120_000 && this.mode !== 'train') this.liveTime = false
     this.pipeline.render(dt)
     this.updateHud(dt)
     input.endFrame()
   }
 
   private lookIdle = 0
+
+  private collectStationStamp(st: Station): void {
+    const net = this.rail.net!
+    const line = net.lines[st.line]
+    if (this.journal.stamp({ kind: 'eki', id: String(st.group), name: st.ja, sub: st.en || line.ja, color: line.color })) {
+      this.journal.discover('ekistamp')
+      this.hud.toast(`You press the <b>${st.ja}駅</b> stamp into your book. (<kbd>Tab</kbd> phone → スタンプ)`, 4500)
+    }
+  }
+
+  /** Things you learn simply by being there at the right moment. */
+  private updateDiscoveries(dt: number): void {
+    this.discoverTimer -= dt
+    if (this.discoverTimer > 0 || this.mode === 'loading') return
+    this.discoverTimer = 1
+    const J = this.journal
+    const w = this.weather
+    const j = this.clock.jst
+    const here = this.mode === 'onfoot' ? this.player.feet : this.pipeline.camera.position
+    if (this.mode === 'onfoot' && w.now.rain > 0.3) J.discover('umbrella')
+    if (w.snowCover > 0.5) J.discover('snow')
+    if ((w.now.wind > 15 && w.now.rain > 5) || w.preset === 'typhoon') J.discover('typhoon')
+    if (j.month === 6 && w.now.rain > 0.3 && w.preset === 'live') J.discover('tsuyu')
+    if (this.pipeline.night > 0.8 && this.pipeline.lights.urban > 0.4 && this.mode === 'onfoot') J.discover('night')
+    if (seasonNow('bloom') > 0.5 && this.mode === 'onfoot') J.discover('sakura')
+    if (seasonNow('autumn') > 0.5 && this.mode === 'onfoot') J.discover('koyo')
+    if (this.mode === 'onfoot' && this.crowd.scrambles.some((s) => s.walkTime() >= 0 && Math.hypot(here.x - s.center.x, here.z - s.center.z) < 35)) J.discover('scramble')
+    if (this.mode === 'train') {
+      this.rideTime += 1
+      if (this.rideTime > 45) J.discover('quiet')
+      if (j.weekday > 0 && j.weekday < 6 && j.hourFloat > 7.3 && j.hourFloat < 9.5) J.discover('rush')
+    }
+    if (this.mode === 'driving') {
+      J.discover('keepleft')
+      if (this.vehicles.current?.spec.id.startsWith('kei')) J.discover('driving')
+    }
+  }
+
+  private updateSound(dt: number): void {
+    const here = this.mode === 'onfoot' ? this.player.feet : this.pipeline.camera.position
+    let people = 0
+    for (const p of this.crowd.peds) if (Math.abs(p.pos.x - here.x) < 40 && Math.abs(p.pos.z - here.z) < 40) people++
+    const j = this.clock.jst
+    const summer = j.month >= 7 && j.month <= 8 && j.hourFloat > 6 && j.hourFloat < 18.5 && this.weather.now.rain < 0.1
+    const run = this.rail.run
+    this.sound.update(dt, {
+      urban: this.pipeline.lights.urban || 0.3,
+      people,
+      rain: this.weather.rainFactor,
+      wind: this.weather.now.wind,
+      cicadas: summer ? 1 - this.pipeline.lights.urban * 0.6 : 0,
+      crossing: this.crowd.scrambles.some((s) => s.walkTime() >= 0 && Math.hypot(here.x - s.center.x, here.z - s.center.z) < 90),
+      train: this.mode === 'train' && run ? run.v : -1,
+      underground: !!run?.underground && this.mode === 'train',
+      indoor: this.pipeline.indoor,
+    })
+  }
+
+  /** Photo mode: save the current frame as a PNG. */
+  private snapPhoto(): void {
+    const c = this.pipeline.renderer.domElement
+    const a = document.createElement('a')
+    const j = this.clock.jst
+    a.download = `nihon-${j.year}${String(j.month).padStart(2, '0')}${String(j.day).padStart(2, '0')}-${String(j.hour).padStart(2, '0')}${String(j.minute).padStart(2, '0')}.png`
+    a.href = c.toDataURL('image/png')
+    a.click()
+    const f = document.createElement('div')
+    f.className = 'flash go'
+    this.ui.appendChild(f)
+    requestAnimationFrame(() => {
+      f.classList.remove('go')
+      setTimeout(() => f.remove(), 600)
+    })
+  }
 
   /** Scramble crossings within reach, in world space, on the game clock. */
   private placeScrambles(): void {
@@ -616,6 +795,13 @@ export class Game {
     if (this.vehicles.current) this.vehicles.exit()
     this.rail.view = 'seat'
     this.trainBaseYaw = null
+    this.rideTime = 0
+    this.sound.play('ic')
+    this.journal.discover('ic')
+    this.journal.discover('train')
+    if (route.legs.some((l) => l.line.kind === 'shinkansen')) this.journal.discover('shinkansen')
+    if (route.legs.some((l) => l.line.kind === 'metro')) this.journal.discover('subway')
+    setTimeout(() => this.journal.discover('melody'), 25000)
     this.rail.begin(route)
     this.updateHints()
   }
@@ -699,6 +885,8 @@ export class Game {
     }
     c.passengerAboard = true
     c.stopTimer = 0
+    this.journal.discover(kind === 'taxi' ? 'taxi' : 'bus')
+    if (kind === 'bus') this.journal.discover('ic')
     this.ride = { car: c, kind, meterM: 0, slowS: 0, last: c.pos.clone(), fare: kind === 'taxi' ? 500 : 210 }
     this.mode = 'passenger'
     this.player.enabled = false

@@ -141,3 +141,66 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d10; col
 .lcd-strip div.past { opacity: .35; }
 .lcd-strip div.next { color: #ffcc33; font-weight: 700; }
 .lcd-strip div.next::after { background: #ffcc33; }
+
+/* ---- Activities ---- */
+.act-head { border-bottom: 1px solid #e3e0d9; padding-bottom: 10px; margin-bottom: 10px; }
+.act-name { font: 700 26px 'Noto Serif JP', serif; }
+.act-en { font-size: 12px; color: #888; letter-spacing: .08em; }
+.act-text { font-size: 13px; line-height: 1.7; color: #333; min-height: 1em; }
+.act-text p { margin: 6px 0 0; }
+.act-opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; margin: 12px 0 6px; }
+.act-opts button { text-align: left; border: 1px solid #ddd8ce; background: #fff; border-radius: 10px; padding: 9px 11px; cursor: pointer; font: 13px 'Noto Sans JP', sans-serif; display: flex; flex-direction: column; gap: 2px; position: relative; }
+.act-opts button:hover { background: #f3f0e9; border-color: #c9c2b4; }
+.act-opts button b { font-size: 15px; }
+.act-opts button span { font-size: 11px; color: #777; }
+.act-opts button em { position: absolute; top: 9px; right: 10px; font-style: normal; font-size: 12px; color: #a33; }
+.omikuji { margin: 8px auto; width: 220px; background: #fffdf6; border: 1px solid #e0d6bd; padding: 10px 14px; text-align: center; font-size: 12px; line-height: 1.8; box-shadow: 0 4px 14px rgba(0,0,0,.08); }
+.om-rank { font: 700 40px 'Noto Serif JP', serif; color: #b2202a; }
+.om-en { font-size: 11px; letter-spacing: .15em; text-transform: uppercase; color: #777; margin-bottom: 4px; }
+
+/* ---- Discovery card ---- */
+.discovery { position: fixed; right: 18px; top: 70px; width: min(330px, calc(100vw - 36px)); background: #f7f4ec; color: #222; border-radius: 12px; padding: 14px 16px 14px; box-shadow: 0 14px 40px rgba(0,0,0,.35); transform: translateX(120%); transition: transform .6s cubic-bezier(.2,.8,.2,1); z-index: 20; }
+.discovery.show { transform: none; }
+.discovery .dc-tag { font-size: 10px; letter-spacing: .25em; color: #b2202a; }
+.discovery .dc-ja { font: 700 24px 'Noto Serif JP', serif; margin-top: 2px; }
+.discovery .dc-en { font-size: 12px; color: #777; margin-bottom: 8px; }
+.discovery p { font-size: 12.5px; line-height: 1.65; margin: 0; }
+
+/* ---- Phone ---- */
+.phone { position: fixed; right: 26px; bottom: 26px; z-index: 29; transform: translateY(120%); transition: transform .45s cubic-bezier(.2,.8,.2,1); pointer-events: auto; }
+.phone.open { transform: none; }
+.ph-body { width: 330px; height: min(640px, calc(100vh - 52px)); background: #111; border-radius: 34px; padding: 12px; box-shadow: 0 30px 80px rgba(0,0,0,.55), inset 0 0 0 2px #333; display: flex; flex-direction: column; }
+.ph-notch { width: 90px; height: 22px; background: #000; border-radius: 0 0 14px 14px; margin: -12px auto 6px; }
+.ph-screen { flex: 1; background: #f6f4ef; border-radius: 22px 22px 6px 6px; overflow-y: auto; padding: 14px 14px 10px; color: #222; font-size: 13px; }
+.ph-screen h3 { margin: 0 0 10px; font: 700 20px 'Noto Serif JP', serif; }
+.ph-screen h3 span { font: 400 12px 'Noto Sans JP', sans-serif; color: #888; margin-left: 6px; }
+.ph-screen h4 { margin: 14px 0 6px; font-size: 14px; }
+.ph-screen label { display: block; font-size: 12px; color: #555; margin: 12px 0 4px; }
+.ph-screen input[type=range] { width: 100%; }
+.ph-hour { float: right; color: #111; }
+.ph-tabs { display: flex; gap: 4px; padding-top: 8px; }
+.ph-tabs button { flex: 1; border: 0; border-radius: 10px; background: #222; color: #bbb; padding: 9px 0; font: 12px 'Noto Sans JP', sans-serif; cursor: pointer; }
+.ph-tabs button.on { background: #f6f4ef; color: #111; }
+.ph-card { border-radius: 14px; padding: 14px; margin-bottom: 10px; color: #fff; }
+.ph-card div { font-size: 11px; letter-spacing: .2em; opacity: .85; }
+.ph-card b { display: block; font-size: 28px; margin: 4px 0; font-variant-numeric: tabular-nums; }
+.ph-card small { font-size: 11px; opacity: .85; line-height: 1.5; display: block; }
+.ph-card.ic { background: linear-gradient(135deg, #1f8f5a, #0e5c8a); }
+.ph-card.cash { background: linear-gradient(135deg, #6b5b3e, #3e3423); }
+.ph-note { font-size: 11px; color: #777; line-height: 1.6; }
+.ph-list details, .ph-list .locked { border-bottom: 1px solid #e4e0d6; padding: 8px 2px; }
+.ph-list summary { cursor: pointer; font-size: 13px; }
+.ph-list p { font-size: 12px; line-height: 1.6; color: #444; margin: 6px 0 2px; }
+.ph-list .locked { color: #aaa; }
+.ph-list .locked span { font-size: 11px; margin-left: 6px; }
+.ph-stamps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stamp { margin: 0; text-align: center; font-size: 10px; color: #555; }
+.stamp svg { width: 100%; background: #fffdf8; border-radius: 6px; }
+.stamp.seal svg { background: none; }
+.ph-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.ph-chips button, .ph-live { border: 1px solid #d6d1c5; background: #fff; border-radius: 99px; padding: 4px 9px; font: 11.5px 'Noto Sans JP', sans-serif; cursor: pointer; color: #333; }
+.ph-chips button.on, .ph-live.on { background: #222; color: #fff; border-color: #222; }
+.ph-live { display: block; width: 100%; margin-top: 12px; border-radius: 10px; padding: 8px; }
+.photo-mode #ui > *:not(.flash) { visibility: hidden; }
+.flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .5s; z-index: 60; }
+.flash.go { opacity: .85; transition: none; }

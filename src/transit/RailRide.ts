@@ -31,6 +31,7 @@ export interface RideHost {
   /** Show/hide a loading veil while the world streams in after a skip. */
   veil: (text: string | null) => void
   worldReadyAt: (p: Vector3) => boolean
+  sound: (name: 'melody' | 'doors' | 'chime') => void
 }
 
 export class RailRide {
@@ -108,7 +109,11 @@ export class RailRide {
     this.interior = buildInterior(run.style, car.length)
     car.group.children[0].add(this.interior)
     run.onArrive = (stop, i) => this.arrive(stop.station, i)
-    run.onDepart = () => this.host.hud.toast('<b>ドアが閉まります。</b> The doors are closing. ♪', 2500)
+    run.onDepart = () => {
+      this.host.sound('melody')
+      setTimeout(() => this.host.sound('doors'), 2800)
+      this.host.hud.toast('♪ <b>ドアが閉まります。</b> The doors are closing.', 2500)
+    }
     run.update(0)
     const first = net.stations[leg.stations[0]]
     const last = net.stations[leg.stations[leg.stations.length - 1]]
@@ -401,6 +406,7 @@ export class RailRide {
     // Announcement as the train approaches the next stop.
     if (!dwelling && ni !== this.announced && run.stopPos(ni) - run.s < 900 && legStops[ni].stops) {
       this.announced = ni
+      this.host.sound('chime')
       const transfer = net
         .complex(next.id)
         .filter((c) => c.line !== run.line.id)

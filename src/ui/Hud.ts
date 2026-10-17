@@ -126,6 +126,36 @@ export class Hud {
     }, ms)
   }
 
+  private discoveryQueue: { ja: string; en: string; text: string }[] = []
+  private discoveryBusy = false
+
+  /** A card for something new the traveller just learned (発見). */
+  showDiscovery(d: { ja: string; en: string; text: string }): void {
+    this.discoveryQueue.push(d)
+    if (!this.discoveryBusy) this.nextDiscovery()
+  }
+
+  private nextDiscovery(): void {
+    const d = this.discoveryQueue.shift()
+    if (!d) {
+      this.discoveryBusy = false
+      return
+    }
+    this.discoveryBusy = true
+    const el = document.createElement('div')
+    el.className = 'discovery'
+    el.innerHTML = `<div class="dc-tag">発見 DISCOVERY</div><div class="dc-ja">${d.ja}</div><div class="dc-en">${d.en}</div><p>${d.text}</p>`
+    this.root.appendChild(el)
+    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')))
+    setTimeout(() => {
+      el.classList.remove('show')
+      setTimeout(() => {
+        el.remove()
+        this.nextDiscovery()
+      }, 700)
+    }, 9000)
+  }
+
   setHints(html: string): void {
     if (this.hints.innerHTML !== html) this.hints.innerHTML = html
   }

@@ -1,6 +1,8 @@
 // PLATEAU (国土交通省) photo-textured 3D city models, streamed per city as
 // 3D Tiles. Heights are ellipsoidal; we shift each city down by its local
 // geoid height so buildings sit exactly on GSI (orthometric) terrain.
+import { ecefToGeodetic } from '../../core/geo'
+import { HERITAGE } from '../../data/heritage'
 import {
   BufferAttribute,
   Group,
@@ -49,6 +51,14 @@ function getDraco(): DRACOLoader {
 
 const LOAD_MARGIN_DEG = 0.012 // ~1.2 km
 const UNLOAD_MARGIN_DEG = 0.05
+
+function inHeritage(lat: number, lon: number): boolean {
+  for (const z of HERITAGE) {
+    const d = Math.hypot((z.lat - lat) * 111000, (z.lon - lon) * 111000 * Math.cos((lat * Math.PI) / 180))
+    if (d < z.radius) return true
+  }
+  return false
+}
 
 export class PlateauManager {
   readonly root = new Group()
@@ -259,6 +269,14 @@ export class PlateauManager {
         else if (height > 12) kind = BUILDING_KIND.office
         else if (height < 9) kind = BUILDING_KIND.house
         if (kind === BUILDING_KIND.house && (fire[id] ?? '') === '耐火' && height > 9) kind = BUILDING_KIND.apartment
+        const name = String(attrs[id]?.['gml:name'] ?? attrs[id]?.['name'] ?? '')
+        if (/神社|大社|神宮|稲荷|八幡|天満宮/.test(name) || (kind === BUILDING_KIND.wood && /殿|社/.test(name))) kind = BUILDING_KIND.shrine
+        // In historic districts small, low buildings are left to the OSM
+        // builder, which gives them vernacular facades and pitched roofs.
+        if (kind !== BUILDING_KIND.wood && kind !== BUILDING_KIND.shrine && height <= 12) {
+          const g2 = ecefToGeodetic(a[0] / a[3], a[1] / a[3], a[2] / a[3])
+          if (inHeritage(g2.lat, g2.lon)) kind = -1
+        }
         kindOf.set(id, kind)
         fhOf.set(id, st > 0 && st < 200 ? Math.min(5.5, Math.max(2.6, height / st)) : 0)
       }
@@ -272,6 +290,15 @@ export class PlateauManager {
         kind[i] = kindOf.get(ids[i]) ?? 0
         fh[i] = fhOf.get(ids[i]) ?? 0
       }
+      // Collapse hidden buildings to a point (no draw, no shadow).
+      const anchor = new Map<number, number>()
+      for (let i = 0; i < count; i++) {
+        if (kind[i] > -0.5) continue
+        const first = anchor.get(ids[i])
+        if (first === undefined) anchor.set(ids[i], i)
+        else pos.setXYZ(i, pos.getX(first), pos.getY(first), pos.getZ(first))
+      }
+      if (anchor.size) pos.needsUpdate = true
       g.setAttribute('bh', new BufferAttribute(bh, 1))
       g.setAttribute('seed', new BufferAttribute(seed, 1))
       g.setAttribute('kind', new BufferAttribute(kind, 1))

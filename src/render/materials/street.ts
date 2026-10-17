@@ -219,13 +219,34 @@ export function createRoofMaterial(): MeshStandardMaterial {
     vertexBody: 'vSeedR = seed;',
     fragmentHead: 'flat varying float vSeedR;',
     albedo: /* glsl */ `
-      float sd = floor(vSeedR * 4096.0 + 0.5) / 4096.0;
+      float style = floor(vSeedR + 0.0001);
+      float sd = floor(fract(vSeedR) * 4096.0 + 0.5) / 4096.0;
       float u = vUv2.x;
       float v = vUv2.y;
-      float kind = fract(sd * 7.31);
+      float kind = style > 3.5 && style < 4.5 ? 0.0 : fract(sd * 7.31);
       vec3 col;
       float rowH = 0.27;
-      if (kind < 0.55) {
+      if (style > 1.5 && style < 2.5) {
+        // 茅葺 thatch: thick straw, darkened and mossy with age, combed ridges.
+        float straw = fbm(vec2(u * 3.0, v * 0.6) + sd * 9.0);
+        col = mix(vec3(0.30, 0.24, 0.15), vec3(0.46, 0.38, 0.24), straw);
+        col = mix(col, vec3(0.20, 0.22, 0.13), smoothstep(0.55, 0.8, n1(vWPos.xz * 0.05 + sd)) * 0.5);
+        col *= 0.88 + 0.18 * sin(u * 9.0 + straw * 4.0);
+        rough = 0.95;
+      } else if (style > 5.5 && style < 6.5) {
+        // 赤瓦 Ryukyu red tiles with white mortar ridges.
+        float row = fract(v / 0.24);
+        float mortar = smoothstep(0.9, 0.97, fract(u / 0.32));
+        col = mix(vec3(0.62, 0.22, 0.14), vec3(0.88, 0.86, 0.80), mortar * 0.8);
+        col *= 0.85 + 0.2 * smoothstep(0.0, 0.8, row);
+        rough = 0.6;
+      } else if (style > 7.5) {
+        // Shrine roofs: green copper (緑青) or cypress bark (檜皮葺).
+        col = fract(sd * 3.7) < 0.5 ? vec3(0.27, 0.45, 0.38) : vec3(0.27, 0.17, 0.11);
+        col *= 0.9 + 0.15 * fbm(vec2(u, v) * 0.8);
+        rough = 0.55;
+        metal = fract(sd * 3.7) < 0.5 ? 0.3 : 0.0;
+      } else if (kind < 0.55) {
         // いぶし瓦 (smoked silver-grey) or glazed blue/brown tiles
         float c = fract(sd * 13.7);
         col = c < 0.55 ? vec3(0.20, 0.21, 0.23) : (c < 0.8 ? vec3(0.13, 0.17, 0.26) : vec3(0.27, 0.17, 0.12));

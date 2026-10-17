@@ -4,6 +4,7 @@
 import {
   CubeCamera,
   DirectionalLight,
+  HemisphereLight,
   Data3DTexture,
   HalfFloatType,
   LinearFilter,
@@ -184,7 +185,7 @@ export class RenderPipeline {
     this.composer.addPass(debug.has('nobloom') ? new EffectPass(this.camera, this.toneMapping) : new EffectPass(this.camera, this.bloom, this.toneMapping))
     this.composer.addPass(new EffectPass(this.camera, new SMAAEffect({ preset: SMAAPreset.HIGH })))
 
-    this.scene.add(this.moon, this.moon.target)
+    this.scene.add(this.moon, this.moon.target, this.bounce)
     this.lights = new NightLights(this.scene)
     this.lights.setPoolSize(16)
 
@@ -370,6 +371,9 @@ export class RenderPipeline {
     this.bloom.luminanceMaterial.threshold = 0.9
     this.bloom.intensity = 0.55 - 0.25 * this.night
     this.renderer.toneMappingExposure = this.exposure
+    // Shade in a sunny street gets ~20% of direct light from sky and bounce.
+    const sunUp = Math.max(0, Math.min(1, (el + 1) / 14))
+    this.bounce.intensity = 0.45 * sunUp * (1 - this.overcast * 0.35) * (1 - this.indoor * 0.9)
     // Moonlight: a dim, cool key light so the countryside at night reads as
     // dark rather than void (heavily exaggerated vs. the real 0.25 lux).
     const up = new Vector3().setFromMatrixColumn(this.world.worldToECEF, 1)
@@ -398,6 +402,8 @@ export class RenderPipeline {
 
   private exposure = 1
   private moon = new DirectionalLight(0x9fb2d6, 0)
+  /** Daylight bounce: sky above, sunlit ground and walls below. */
+  private bounce = new HemisphereLight(0xb9cbe6, 0x8a7d6c, 0)
 
   private debugNoPost = new URLSearchParams(location.search).has('nopost')
 

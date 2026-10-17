@@ -6,6 +6,7 @@
 import { VectorTile, type VectorTileFeature } from '@mapbox/vector-tile'
 import { PbfReader } from 'pbf'
 import earcut from 'earcut'
+import { HERITAGE, type HeritageStyle } from '../../data/heritage'
 import { tileCenter, tileXToLon, tileYToLat, type TileId } from '../../core/tiles'
 import { WGS84_A, WGS84_E2 } from '../../core/geo'
 import { surfaceHeight, type DemLike } from '../terrain/surface'
@@ -751,6 +752,43 @@ export function buildTile(req: BuildRequest): TileBuild {
       shopGrid.set(k, (shopGrid.get(k) ?? 0) + 1)
     }
   }
+  // Shrines and temples: nearby buildings become their halls.
+  const worship: Array<{ x: number; y: number; shrine: boolean }> = []
+  if (plc0) {
+    for (let i = 0; i < plc0.length; i++) {
+      const f = plc0.feature(i)
+      const n = String(f.properties.name ?? '')
+      const isPow = f.properties.class === 'place_of_worship'
+      const shrineName = /神社|大社|神宮|稲荷|八幡|天満宮|社$|宮$|殿/.test(n)
+      const templeName = /寺|院$|堂|観音|不動/.test(n)
+      if (!isPow && !shrineName && !templeName) continue
+      const g = f.loadGeometry()[0]?.[0]
+      if (!g) continue
+      const p = extentToLocal(plc0.extent, g.x, g.y)
+      worship.push({ x: p[0], y: p[1], shrine: shrineName && !(templeName && !/神社|神宮|大社/.test(n)) })
+    }
+  }
+  const worshipNear = (x: number, y: number): { shrine: boolean } | null => {
+    let best: { shrine: boolean } | null = null
+    let bd = 45 * 45
+    for (const w of worship) {
+      const d = (w.x - x) ** 2 + (w.y - y) ** 2
+      if (d < bd) {
+        bd = d
+        best = w
+      }
+    }
+    return best
+  }
+  // Historic districts overlapping this tile.
+  const zones = HERITAGE.map((z) => ({ ...z, x: (z.lon - anchor.lon) * mLon, y: (z.lat - anchor.lat) * mLat })).filter(
+    (z) => Math.abs(z.x) < half + z.radius && Math.abs(z.y) < half + z.radius,
+  )
+  const styleAt = (x: number, y: number): HeritageStyle | null => {
+    for (const z of zones) if ((z.x - x) ** 2 + (z.y - y) ** 2 < z.radius * z.radius) return z.style
+    return null
+  }
+
   const shopsNear = (x: number, y: number) => {
     let n = 0
     const cx = Math.floor(x / 20)
@@ -778,11 +816,14 @@ export function buildTile(req: BuildRequest): TileBuild {
         if (!inTile(c)) continue
         const clat = latOf(c[1])
         const clon = lonOf(c[0])
-        if (req.coverage.some((b) => clon >= b[0] && clon <= b[2] && clat >= b[1] && clat <= b[3])) {
+        const area = Math.abs(polygonArea(outer))
+        // PLATEAU wins, except for small buildings in historic districts,
+        // where we draw the vernacular house (PLATEAU hides its LOD1 box).
+        const heritageHouse = area < 700 && height <= 12 && styleAt(c[0], c[1]) !== null
+        if (!heritageHouse && req.coverage.some((b) => clon >= b[0] && clon <= b[2] && clat >= b[1] && clat <= b[3])) {
           skipped++
           continue
         }
-        const area = Math.abs(polygonArea(outer))
         if (area < 6) continue
         const seed = hash2(Math.round(c[0] * 10), Math.round(c[1] * 10))
         const gs = outer.map((p) => ground(p[0], p[1]))
@@ -797,14 +838,50 @@ export function buildTile(req: BuildRequest): TileBuild {
         else if (shops >= 2) kind = 7
         else if (height >= 9 && height < 50 && seed < 0.6) kind = 6
         else kind = 2
-        let wallTop = gmax + Math.max(height, kind === 1 ? 6.2 : 3)
+        // Vernacular architecture: historic districts, shrine and temple halls.
+        const style = area < 700 && height <= 12 ? styleAt(c[0], c[1]) : null
+        const pow = area < 2500 && height <= 20 ? worshipNear(c[0], c[1]) : null
+        let roofStyle = 0 // 0 by seed, 2 thatch, 4 kawara, 6 red Ryukyu tile, 8 shrine copper/bark
+        let hip: boolean | undefined
+        let pitch = 0.42 + seed * 0.15
+        let over = 0.45
+        let lowWalls = 0
+        if (pow) {
+          kind = pow.shrine ? 10 : 5
+          roofStyle = pow.shrine ? 8 : 4
+          hip = !pow.shrine
+          pitch = pow.shrine ? 0.6 : 0.72
+          over = 1.1
+        } else if (style === 'machiya') {
+          kind = 8
+          roofStyle = 4
+          hip = false
+          pitch = 0.5
+          over = 0.75
+        } else if (style === 'gassho' || style === 'kayabuki') {
+          kind = 9
+          roofStyle = 2
+          hip = style === 'kayabuki'
+          pitch = style === 'gassho' ? 1.75 : 1.2
+          over = 1.0
+          lowWalls = 2.7
+        } else if (style === 'ryukyu') {
+          kind = 11
+          roofStyle = 6
+          hip = true
+          pitch = 0.45
+          over = 0.7
+          lowWalls = 2.8
+        }
+        const vernacular = kind >= 8 || kind === 5
+        let wallTop = gmax + (lowWalls || Math.max(height, kind === 1 || kind === 8 ? 6.2 : 3))
         const base = gmin - 1.2 + minH
-        const obb = kind === 1 ? minAreaRect(outer) : null
-        const pitched = !!obb && area / obb.area > 0.72 && obb.halfShort < 9 && obb.halfShort > 1.5
+        const obb = kind === 1 || vernacular ? minAreaRect(outer) : null
+        const pitched = !!obb && area / obb.area > (vernacular ? 0.55 : 0.72) && obb.halfShort < (vernacular ? 14 : 9) && obb.halfShort > 1.5
         let roofH = 0
         if (pitched) {
-          roofH = obb!.halfShort * (0.42 + seed * 0.15)
-          wallTop -= roofH * 0.35
+          roofH = obb!.halfShort * pitch
+          if (!lowWalls) wallTop -= roofH * 0.35
         }
         // Walls
         for (const ring of rings) {
@@ -831,7 +908,7 @@ export function buildTile(req: BuildRequest): TileBuild {
           }
         }
         if (pitched) {
-          addHouseRoof(roofs, buildings, obb!, wallTop, roofH, seed, V, kind)
+          addHouseRoof(roofs, buildings, obb!, wallTop, roofH, seed, V, kind, hip, over, roofStyle)
         } else {
           // Flat roof
           const flat: number[] = []
@@ -967,8 +1044,10 @@ function addHouseRoof(
   seed: number,
   V: VFn,
   kind: number,
+  hipRoof?: boolean,
+  over = 0.45,
+  roofStyle = 0,
 ): void {
-  const over = 0.45
   const L = obb.halfLong + over
   const S = obb.halfShort + over
   const ax = obb.ax
@@ -976,7 +1055,7 @@ function addHouseRoof(
   const bx = -ay
   const by = ax
   const P = (u: number, v: number, h: number) => V(obb.cx + ax * u + bx * v, obb.cy + ay * u + by * v, h)
-  const hip = seed > 0.45
+  const hip = hipRoof ?? seed > 0.45
   const ridge = hip ? Math.max(0, L - S) : L
   const top = eave + roofH
   const eaveH = eave - over * (roofH / S)
@@ -997,7 +1076,7 @@ function addHouseRoof(
       pts.reverse()
       uvs.reverse()
     }
-    const idx = pts.map((p, i) => roofs.vertex(p[0], p[1], p[2], nx, ny, nz, uvs[i][0], uvs[i][1], seed))
+    const idx = pts.map((p, i) => roofs.vertex(p[0], p[1], p[2], nx, ny, nz, uvs[i][0], uvs[i][1], seed + roofStyle))
     for (let i = 1; i < idx.length - 1; i++) roofs.tri(idx[0], idx[i], idx[i + 1])
   }
   const slope = Math.hypot(S, roofH)

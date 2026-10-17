@@ -36,6 +36,8 @@ import { Phone } from '../ui/Phone'
 import { Soundscape } from '../audio/Soundscape'
 import { PlacedProps } from '../world/props/PlacedProps'
 import { NearPeople } from '../people/NearPeople'
+import { AddressLookup } from '../core/address'
+import { PREFECTURES } from '../data/prefectures'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
 
@@ -117,6 +119,11 @@ export class Game {
   readonly sound = new Soundscape()
   readonly placed = new PlacedProps()
   readonly nearPeople: NearPeople
+  readonly address = new AddressLookup()
+  private currentPref = 0
+  private autoQualityTimer = 0
+  private autoQualityDrops = 0
+  private explicitQuality = new URLSearchParams(location.search).has('quality')
   private placedTimer = 0
   private nearSpot: Spot | null = null
   private purchases = 0
@@ -339,6 +346,7 @@ export class Game {
       this.rail.load().catch((e) => console.warn('rail network unavailable', e)),
       this.crowd.init(Math.ceil(this.crowd.cap / 5)).catch((e) => console.warn('crowd unavailable', e)),
       this.placed.init().catch((e) => console.warn('props unavailable', e)),
+      this.address.load().catch((e) => console.warn('municipality table unavailable', e)),
       PopulationGrid.load()
         .then((g) => (this.population = g))
         .catch((e) => console.warn('population grid unavailable', e)),
@@ -703,6 +711,21 @@ export class Game {
     updateWater(this.elapsed)
     buildingUniforms.uNight.value = night
     buildingUniforms.uTime.value = this.elapsed
+    // Adaptive quality: step down if the machine can't keep up.
+    if (!this.explicitQuality && this.mode !== 'loading' && this.elapsed > 20) {
+      this.autoQualityTimer += realDt
+      if (this.autoQualityTimer > 6) {
+        this.autoQualityTimer = 0
+        const order = ['low', 'medium', 'high', 'ultra'] as const
+        const i = order.indexOf(this.params.quality)
+        if (this.fps > 0 && this.fps < 22 && i > 0 && this.autoQualityDrops < 2) {
+          this.autoQualityDrops++
+          this.params.quality = order[i - 1]
+          this.applyQuality(this.params.quality)
+          this.hud.toast(`Graphics lowered to <b>${this.params.quality}</b> for smoother play (<kbd>Tab</kbd> → 設定 to change).`, 5000)
+        }
+      }
+    }
     this.placedTimer -= dt
     if (this.placedTimer <= 0 && this.mode !== 'loading') {
       this.placedTimer = 3
@@ -1186,6 +1209,16 @@ export class Game {
 
   private updatePlace(p: Vector3): void {
     const g = this.world.geodeticFromWorld(p)
+    const addr = this.mode === 'fly' ? null : this.address.query(g.lat, g.lon)
+    if (addr && addr.prefCode !== this.currentPref) {
+      const first = this.currentPref === 0
+      this.currentPref = addr.prefCode
+      const pref = PREFECTURES.find((x) => x.code === addr.prefCode)
+      if (pref) {
+        this.journal.visit(pref.ja)
+        setTimeout(() => this.hud.showPrefecture(pref, this.journal.data.places.filter((pl) => PREFECTURES.some((x) => x.ja === pl)).length), first ? 6000 : 500)
+      }
+    }
     let best: Place | null = null
     let bestD = Infinity
     for (const pl of this.places) {
@@ -1204,7 +1237,7 @@ export class Game {
       kanji: best.name,
       reading: best.reading,
       romaji: best.romaji || best.nameEn,
-      sub: city ? `${city.pref} ${city.name}` : undefined,
+      sub: addr ? `${addr.pref} ${addr.city}` : city ? `${city.pref} ${city.name}` : undefined,
     })
   }
 

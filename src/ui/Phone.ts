@@ -90,7 +90,8 @@ export class Phone {
       case 'stamps': {
         const eki = j.stamps.filter((s) => s.kind === 'eki')
         const seals = j.stamps.filter((s) => s.kind === 'goshuin')
-        return `<h3>スタンプ帳 <span>${eki.length} stations · ${seals.length} seals</span></h3>
+        const prefs = j.places.filter((p) => /[都道府県]$/.test(p)).length
+        return `<h3>スタンプ帳 <span>${eki.length} stations · ${seals.length} seals · ${prefs}/47 prefectures</span></h3>
           <div class="ph-stamps">${eki.map((s) => ekiStamp(s.name, s.sub, s.color, s.date)).join('') || '<p class="ph-note">Visit a station to collect its 駅スタンプ.</p>'}</div>
           <h4>御朱印帳</h4>
           <div class="ph-stamps">${seals.map((s) => goshuin(s.name, s.sub, s.date)).join('') || '<p class="ph-note">Ask for a 御朱印 at a shrine or temple office.</p>'}</div>`

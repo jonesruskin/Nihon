@@ -120,11 +120,27 @@ export class Hud {
     el.className = 'toast'
     el.innerHTML = html
     this.toasts.appendChild(el)
-    requestAnimationFrame(() => el.classList.add('show'))
+    setTimeout(() => el.classList.add('show'), 30)
     setTimeout(() => {
       el.classList.remove('show')
       setTimeout(() => el.remove(), 600)
     }, ms)
+  }
+
+  /** Welcome to a new prefecture: name, capital, specialities, dialect, a fact. */
+  showPrefecture(p: { ja: string; en: string; region: string; capital: string; pop: number; meibutsu: string; dialect: string; fact: string }, count: number): void {
+    const el = document.createElement('div')
+    el.className = 'pref-card'
+    el.innerHTML = `<div class="pc-hello">ようこそ — Welcome to</div>
+      <div class="pc-ja">${p.ja}</div><div class="pc-en">${p.en} · ${p.region} · ${count} / 47 visited</div>
+      <dl><dt>県庁所在地</dt><dd>${p.capital} · ${p.pop >= 1 ? p.pop.toFixed(1) + 'M' : Math.round(p.pop * 1000) + 'k'} people</dd>
+      <dt>名物</dt><dd>${p.meibutsu}</dd><dt>方言</dt><dd>${p.dialect}</dd></dl><p>${p.fact}</p>`
+    this.root.appendChild(el)
+    setTimeout(() => el.classList.add('show'), 40)
+    setTimeout(() => {
+      el.classList.remove('show')
+      setTimeout(() => el.remove(), 900)
+    }, 11000)
   }
 
   private discoveryQueue: { ja: string; en: string; text: string }[] = []
@@ -147,7 +163,7 @@ export class Hud {
     el.className = 'discovery'
     el.innerHTML = `<div class="dc-tag">発見 DISCOVERY</div><div class="dc-ja">${d.ja}</div><div class="dc-en">${d.en}</div><p>${d.text}</p>`
     this.root.appendChild(el)
-    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')))
+    setTimeout(() => el.classList.add('show'), 40)
     setTimeout(() => {
       el.classList.remove('show')
       setTimeout(() => {

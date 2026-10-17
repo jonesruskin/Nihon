@@ -208,3 +208,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d10; col
 .ph-models div { font-size: 10.5px; line-height: 1.5; color: #555; border-bottom: 1px dotted #ddd; padding: 3px 0; }
 .ph-models a { color: #1f6f9a; }
 .attrib { position: fixed; left: 50%; bottom: 4px; transform: translateX(-50%); font-size: 9.5px; color: rgba(255,255,255,.45); text-shadow: 0 1px 3px rgba(0,0,0,.6); white-space: nowrap; }
+.pref-card { position: fixed; left: 18px; top: 60px; width: min(340px, calc(100vw - 36px)); background: rgba(12,14,18,.72); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); color: #fff; border-radius: 14px; padding: 14px 16px; border-left: 3px solid var(--accent); opacity: 0; transform: translateX(-20px); transition: opacity .8s, transform .8s; z-index: 19; }
+.pref-card.show { opacity: 1; transform: none; }
+.pc-hello { font-size: 11px; letter-spacing: .2em; opacity: .7; }
+.pc-ja { font: 700 34px 'Noto Serif JP', serif; letter-spacing: .1em; margin-top: 2px; }
+.pc-en { font-size: 12px; opacity: .75; margin-bottom: 8px; }
+.pref-card dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 12px; }
+.pref-card dt { opacity: .6; }
+.pref-card dd { margin: 0; }
+.pref-card p { font-size: 12px; line-height: 1.6; margin: 8px 0 0; opacity: .9; }

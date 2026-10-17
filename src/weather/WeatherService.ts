@@ -23,7 +23,8 @@ export class WeatherService {
     if (this.cache && this.cache.key === key) {
       const w = this.cache.hours.get(hour)
       if (w) return w
-    } else if (!this.inflight && performance.now() > this.failedUntil) {
+    } else if (!this.inflight && performance.now() > this.failedUntil && (Date.now() - date.getTime()) / 86400e3 > -15) {
+      // (Beyond the two-week forecast there is nothing to fetch: climate it is.)
       this.inflight = this.fetch(key, lat, lon, date).finally(() => (this.inflight = null))
     }
     return climateWeather(lat, lon, elevation, date)

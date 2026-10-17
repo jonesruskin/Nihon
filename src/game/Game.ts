@@ -34,6 +34,7 @@ import { Journal } from '../tourism/Journal'
 import { ActivityPanel, SpotIndex, spotPrompt, type Spot } from '../tourism/Activities'
 import { Phone } from '../ui/Phone'
 import { Soundscape } from '../audio/Soundscape'
+import { PlacedProps } from '../world/props/PlacedProps'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
 
@@ -113,6 +114,8 @@ export class Game {
   readonly activity: ActivityPanel
   readonly phone: Phone
   readonly sound = new Soundscape()
+  readonly placed = new PlacedProps()
+  private placedTimer = 0
   private nearSpot: Spot | null = null
   private purchases = 0
   private discoverTimer = 0
@@ -159,7 +162,7 @@ export class Game {
     this.player = new Player(this.physics)
     this.rig = new CameraRig(this.pipeline.camera, this.physics)
     const scene = this.pipeline.scene
-    scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root, this.traffic.root, this.crowd.root, this.weather.precip.mesh)
+    scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root, this.traffic.root, this.crowd.root, this.weather.precip.mesh, this.placed.root)
     const wp = new URLSearchParams(location.search).get('weather')
     if (wp) this.weather.preset = wp as WeatherPreset
     this.map = new MapView(ui, {
@@ -268,6 +271,10 @@ export class Game {
     }
     window.addEventListener('pointerdown', startAudio)
     window.addEventListener('keydown', startAudio)
+    this.placed.onColliders = (c) => {
+      this.colliders.removePrefix('placed')
+      if (c.length) this.colliders.addCylinders('placed', this.placed.root, c, 1500)
+    }
     this.placeScrambles()
     this.traffic.graph.allRed = (pos) =>
       this.crowd.scrambles.some((sc) => sc.walkTime() >= 0 && Math.hypot(pos.x - sc.center.x, pos.z - sc.center.z) < sc.radius + 18)
@@ -277,6 +284,7 @@ export class Game {
       this.rail.snap.invalidate()
       this.crowd.rebase(delta)
       this.spots.invalidate()
+      this.placed.invalidate()
       this.pipeline.scene.updateMatrixWorld(true)
       this.physics.syncStatics()
       if (this.player.body) this.player.rebase(delta)
@@ -327,6 +335,7 @@ export class Game {
       this.characters.init(),
       this.rail.load().catch((e) => console.warn('rail network unavailable', e)),
       this.crowd.init(Math.ceil(this.crowd.cap / 5)).catch((e) => console.warn('crowd unavailable', e)),
+      this.placed.init().catch((e) => console.warn('props unavailable', e)),
       PopulationGrid.load()
         .then((g) => (this.population = g))
         .catch((e) => console.warn('population grid unavailable', e)),
@@ -690,6 +699,11 @@ export class Game {
     updateWater(this.elapsed)
     buildingUniforms.uNight.value = night
     buildingUniforms.uTime.value = this.elapsed
+    this.placedTimer -= dt
+    if (this.placedTimer <= 0 && this.mode !== 'loading') {
+      this.placedTimer = 3
+      this.placed.update(this.vector.readyTiles)
+    }
     this.updateDiscoveries(dt)
     this.updateSound(dt)
     if (this.liveTime && Math.abs(this.clock.date.getTime() - Date.now()) > 120_000 && this.mode !== 'train') this.liveTime = false

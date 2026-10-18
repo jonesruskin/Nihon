@@ -5,8 +5,9 @@
 import { Vector3, type Group } from 'three'
 import type { Poi } from '../world/vector/build'
 import type { Journal } from './Journal'
+import { OMIYAGE } from '../data/prefectures'
 
-export type SpotKind = 'vending' | 'konbini' | 'ramen' | 'food' | 'cafe' | 'izakaya' | 'shrine' | 'temple' | 'hotel' | 'onsen'
+export type SpotKind = 'vending' | 'konbini' | 'ramen' | 'food' | 'cafe' | 'izakaya' | 'shrine' | 'temple' | 'hotel' | 'onsen' | 'souvenir' | 'arcade' | 'karaoke'
 
 export interface Spot {
   kind: SpotKind
@@ -27,6 +28,8 @@ export interface ActivityHost {
   passTime: (minutes: number) => void
   sleepUntilMorning: () => void
   sound: (name: 'ic' | 'can' | 'bell' | 'clap' | 'coin' | 'chime') => void
+  /** The prefecture you are in, for its local specialities (名物). */
+  prefecture: () => { code: number; ja: string; en: string } | null
 }
 
 const KONBINI = /セブン|ファミリーマート|ファミマ|ローソン|ミニストップ|デイリー|セイコーマート|ポプラ|NewDays|ニューデイズ|7-Eleven|FamilyMart|Lawson/i
@@ -41,6 +44,9 @@ function classify(p: Poi): SpotKind | null {
     return p.cls === 'place_of_worship' ? 'temple' : null
   }
   if (/温泉|の湯|湯屋|銭湯|スパ/.test(n) || p.sub === 'public_bath') return 'onsen'
+  if (p.sub === 'gift' || /土産|みやげ|物産|特産|銘菓|名産/.test(n)) return 'souvenir'
+  if (p.sub === 'amusement_arcade' || /ゲームセンター|ゲーセン|タイトーステーション|GiGO|ギーゴ|セガ|ラウンドワン|namco|ナムコ|モーリーファンタジー/i.test(n)) return 'arcade'
+  if (p.cls === 'karaoke' || p.sub === 'karaoke' || /カラオケ|ビッグエコー|まねきねこ|ジャンカラ|歌広場/.test(n)) return 'karaoke'
   if (p.cls === 'lodging' || /ホテル|旅館|イン$|Hotel|Inn/.test(n)) return 'hotel'
   if (/ラーメン|らーめん|拉麺|麺|そば|うどん|牛丼|吉野家|松屋|すき家/.test(n)) return 'ramen'
   if (p.cls === 'bar' || p.cls === 'beer' || /居酒屋|酒場|焼鳥|やきとり/.test(n)) return 'izakaya'
@@ -105,6 +111,9 @@ export function spotPrompt(s: Spot): string {
     temple: 'Visit the temple',
     hotel: 'Check in',
     onsen: 'Soak in the onsen',
+    souvenir: 'Browse the souvenirs',
+    arcade: 'Go into the game centre',
+    karaoke: 'Sing karaoke',
   }
   return `<kbd>E</kbd>${label[s.kind]} <span style="opacity:.75">${esc(s.name)}</span>`
 }
@@ -194,6 +203,14 @@ export class ActivityPanel {
         return 'The front desk greets you. Shoes off at the genkan if it is a ryokan.'
       case 'onsen':
         return 'Separate baths for men (男) and women (女) behind the noren curtains.'
+      case 'souvenir': {
+        const p = this.host.prefecture()
+        return `Shelves of beautifully wrapped boxes${p ? ` — the specialities of <b>${p.ja}</b> (${p.en})` : ''}. Individually wrapped sweets are made for sharing.`
+      }
+      case 'arcade':
+        return 'A wall of noise: UFO catchers by the door, rhythm games upstairs, purikura booths at the back.'
+      case 'karaoke':
+        return h < 11 ? 'Daytime rates (昼カラ) are cheap — and you get a private room, not a stage.' : 'Private rooms by the hour, a tablet full of songs and a phone on the wall for ordering drinks.'
     }
   }
 
@@ -275,6 +292,43 @@ export class ActivityPanel {
         return [
           { label: 'ビジネスホテル', sub: 'Business hotel — sleep until morning', price: 8800, run: () => (H.sleepUntilMorning(), H.toast('Compact room, spotless bathroom, breakfast at 7. おはようございます!')) },
           { label: '旅館', sub: 'Ryokan with kaiseki dinner — sleep until morning', price: 22000, run: () => (H.sleepUntilMorning(), H.toast('Tatami, futon, yukata, a 12-course kaiseki dinner and a dawn bath. 最高!')) },
+        ]
+      case 'souvenir': {
+        j.discover('omiyage')
+        const pref = H.prefecture()
+        const items = (pref && OMIYAGE[pref.code]) ?? [['和菓子', 'Assorted Japanese sweets'], ['せんべい', 'Rice crackers'], ['手ぬぐい', 'Printed cotton towel']]
+        return items.map(([name, desc], i) => {
+          const price = [1080, 1620, 2160][i]
+          return {
+            label: name,
+            sub: desc,
+            price,
+            run: () =>
+              `The clerk wraps it in the shop’s paper and offers a spare bag for each gift (おみやげ用の袋). Back home — or at work tomorrow — it is shared with everyone: travel brings something back for the people who stayed.`,
+          }
+        })
+      }
+      case 'arcade':
+        j.discover('gamecenter')
+        return [
+          {
+            label: 'UFOキャッチャー',
+            sub: 'Crane game — ¥100 a try',
+            price: 100,
+            method: 'ic',
+            run: () =>
+              Math.random() < 0.18
+                ? (H.sound('chime'), 'The claw holds… and drops it in the chute! Staff hand you a bag. Players often ask staff to nudge a prize to a better spot — they will.')
+                : 'So close. The prize rolls back. (アームが弱い — the claw is weak, as everyone says.)',
+          },
+          { label: '太鼓の達人', sub: 'Drum rhythm game, two songs', price: 100, method: 'ic', run: () => (H.passTime(5), 'ドン！カッ！ A crowd of kids watches a regular play on the hardest level without looking.') },
+          { label: 'プリクラ', sub: 'Photo-sticker booth', price: 500, run: () => (H.passTime(10), 'Big eyes, smooth skin, glitter stamps, your name in katakana. The stickers print in a minute.') },
+        ]
+      case 'karaoke':
+        j.discover('karaoke')
+        return [
+          { label: '1時間', sub: 'One hour, free soft-drink bar', price: H.hour() < 18 ? 600 : 1300, run: () => (H.passTime(60), 'You pick a song from the tablet; the score appears at the end. Nobody here sings to strangers — the rooms are private.') },
+          { label: 'フリータイム', sub: 'Stay as long as you like (until 19:00)', price: 1500, run: () => (H.passTime(180), 'Three hours of songs. It is called karaoke — カラ (empty) オケ (orchestra).') },
         ]
       case 'onsen':
         j.discover('onsen')
@@ -375,7 +429,7 @@ function drawFortune(): { rank: string; en: string; bad: boolean; lines: string[
 }
 
 function kindName(k: SpotKind): string {
-  return { vending: 'Vending machine', konbini: 'Convenience store', ramen: 'Noodle shop', food: 'Restaurant', cafe: 'Café', izakaya: 'Izakaya', shrine: 'Shinto shrine', temple: 'Buddhist temple', hotel: 'Hotel', onsen: 'Hot spring' }[k]
+  return { vending: 'Vending machine', konbini: 'Convenience store', ramen: 'Noodle shop', food: 'Restaurant', cafe: 'Café', izakaya: 'Izakaya', shrine: 'Shinto shrine', temple: 'Buddhist temple', hotel: 'Hotel', onsen: 'Hot spring', souvenir: 'Souvenir shop', arcade: 'Game centre', karaoke: 'Karaoke' }[k]
 }
 
 function esc(s: string): string {

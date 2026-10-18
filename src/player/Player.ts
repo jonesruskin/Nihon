@@ -28,6 +28,8 @@ export class Player {
   gait: Gait = 'idle'
   speed = 0
   enabled = true
+  /** Can the player stand at this world (x, z)? (The shoreline.) */
+  canEnter: ((x: number, z: number) => boolean) | null = null
   readonly radius = 0.28
   readonly halfHeight = 0.58
   private airTime = 0
@@ -113,8 +115,14 @@ export class Player {
     }
     const desired = { x: this.velocity.x * h, y: this.velocity.y * h, z: this.velocity.z * h }
     this.controller.computeColliderMovement(this.collider, desired, undefined, groups(PLAYER_GROUP, WORLD_GROUP | VEHICLE_BIT))
-    const mv = this.controller.computedMovement()
+    const mv = { ...this.controller.computedMovement() }
     const t = this.body.translation()
+    // The shoreline: wade into the shallows, but no walking out over the
+    // seabed (unless you are already out there and heading back).
+    if (this.canEnter && (mv.x || mv.z) && !this.canEnter(t.x + mv.x, t.z + mv.z) && this.canEnter(t.x, t.z)) {
+      mv.x = 0
+      mv.z = 0
+    }
     this.body.setNextKinematicTranslation({ x: t.x + mv.x, y: t.y + mv.y, z: t.z + mv.z })
     this.grounded = this.controller.computedGrounded()
     if (this.grounded && this.velocity.y > 0 && this.airTime < 0.05) this.grounded = false

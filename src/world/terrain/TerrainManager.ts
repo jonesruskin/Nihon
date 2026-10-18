@@ -224,6 +224,11 @@ export class TerrainManager {
   }
 
   /** Height (m) at a geodetic point from the finest loaded DEM. */
+  /** Open sea (deeper than wading depth) at a point? */
+  isSea(lat: number, lon: number): boolean {
+    return this.dem.seaAt(lat, lon) > 0.35
+  }
+
   heightAt(lat: number, lon: number): number {
     return this.dem.heightAt(lat, lon)
   }

@@ -100,6 +100,8 @@ export class Crowd {
   private meshes: InstancedMesh[] = []
   private slotPeds: Ped[][] = []
   peds: Ped[] = []
+  /** Where the player stands (on foot), so people walk around them. */
+  player: Vector3 | null = null
   /** Air temperature (°C), which decides how people are dressed. */
   temperature = 18
   private edges: Edge[] = []
@@ -635,6 +637,17 @@ export class Crowd {
               if (o.edge === p.edge && o.dir === p.dir) want = Math.min(want, o.speed * 0.95)
               else p.lane = Math.min(e.width * 0.5, p.lane + dt * 0.8)
             }
+        // Step around the player rather than through them.
+        if (this.player) {
+          const ox = this.player.x - p.pos.x
+          const oz = this.player.z - p.pos.z
+          const ahead = ox * fwd.x + oz * fwd.z
+          const side = ox * fwd.z - oz * fwd.x // > 0: the player is on our left
+          if (ahead > -0.2 && ahead < 2.4 && Math.abs(side) < 0.85) {
+            p.lane = Math.max(-e.width * 0.5, Math.min(e.width * 0.5, p.lane - (side >= 0 ? 1 : -1) * dt * 1.8))
+            if (ahead < 1) want = Math.min(want, 0.35)
+          }
+        }
         p.speed += (want - p.speed) * Math.min(1, dt * 2)
         if (p.timer <= 0) {
           // Pause now and then: phones, shop windows, waiting for a friend.

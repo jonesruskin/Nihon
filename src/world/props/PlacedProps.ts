@@ -22,6 +22,20 @@ interface Placement {
 
 type TileLike = { key: string; build: { pois: Poi[]; paths: NavPath[] }; group: Group }
 
+// Great torii (大鳥居) that OSM marks as landmarks, sized after the real
+// thing (the model is 5.5 m tall). Matched against the shrine they belong to.
+const GREAT_TORII: Array<{ shrine: RegExp; h: number }> = [
+  { shrine: /嚴島|厳島|Itsukushima/, h: 16.6 },
+  { shrine: /平安神宮/, h: 24.2 },
+  { shrine: /明治神宮/, h: 12 },
+  { shrine: /靖國神社|靖国神社/, h: 25 },
+  { shrine: /大神神社/, h: 32.2 },
+  { shrine: /熊野本宮/, h: 33.9 },
+  { shrine: /彌彦神社|弥彦神社/, h: 30.2 },
+  { shrine: /伏見稲荷/, h: 13 },
+]
+const TORII_MODEL_H = 5.5
+
 const MODELS: Record<string, number> = { torii: 160, lantern_stone: 400, postbox_red: 120, bicycle: 900, bicycle_yellow: 600 }
 
 export class PlacedProps {
@@ -120,6 +134,7 @@ export class PlacedProps {
     const templeRe = /寺|院$|観音|不動/
     const done: Vector3[] = []
     for (const p of pois) {
+      if (p.cls === 'information') continue // signboards about a shrine
       const isShrine = shrineRe.test(p.name)
       const isTemple = !isShrine && (templeRe.test(p.name) || p.cls === 'place_of_worship')
       if (!isShrine && !isTemple) continue
@@ -145,6 +160,32 @@ export class PlacedProps {
         place.lantern_stone?.push({ pos: l, yaw: yaw + (s > 0 ? Math.PI : 0), scale: 0.8 + big * 0.3 })
         this.colliders.push([l.x, l.y, l.z, 0.65, 0.45])
       }
+    }
+    const greats: Vector3[] = []
+    // Great torii, standing where OSM puts them (in the sea at Itsukushima),
+    // facing their shrine.
+    for (const p of pois) {
+      if (!/大鳥居|Great Torii/i.test(`${p.name} ${p.nameEn}`)) continue
+      if (greats.some((d) => d.distanceTo(p.w) < 40)) continue
+      const near = pois.filter((q) => q !== p && /神社|神宮|大社|稲荷|嚴島|厳島/.test(q.name) && !/鳥居/.test(q.name) && q.w.distanceTo(p.w) < 1500)
+      let known: (typeof GREAT_TORII)[number] | undefined
+      let shrine: (typeof near)[number] | undefined
+      for (const g of GREAT_TORII) {
+        const m = near.filter((q) => g.shrine.test(`${q.name} ${q.nameEn}`)).sort((a, b) => a.w.distanceTo(p.w) - b.w.distanceTo(p.w))[0]
+        if (m) {
+          known = g
+          shrine = m
+          break
+        }
+      }
+      shrine ??= near.sort((a, b) => a.w.distanceTo(p.w) - b.w.distanceTo(p.w))[0]
+      if (!shrine) continue
+      const dir = shrine.w.clone().sub(p.w).setY(0).normalize()
+      const scale = (known?.h ?? 12) / TORII_MODEL_H
+      place.torii?.push({ pos: p.w.clone(), yaw: Math.atan2(dir.x, dir.z), scale })
+      greats.push(p.w)
+      const right = new Vector3(dir.z, 0, -dir.x)
+      for (const sd of [-1, 1]) this.colliders.push([p.w.x + right.x * sd * 2.9 * scale, p.w.y, p.w.z + right.z * sd * 2.9 * scale, 2.7 * scale, 0.25 * scale])
     }
     // Post boxes outside post offices.
     for (const p of pois) {

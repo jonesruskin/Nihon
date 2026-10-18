@@ -12,6 +12,8 @@ export interface DemTile {
   id: TileId
   heights: Float32Array // DEM_SIZE * DEM_SIZE, row-major from north-west
   hasSea: boolean
+  /** 1 where the cell is open sea (no land elevation), else 0. */
+  sea?: Uint8Array
   minH: number
   maxH: number
 }
@@ -74,7 +76,9 @@ export class DemProvider {
     const gsi = await fetchImageData(GSI_DEM(t)).catch(() => null)
     if (gsi) na = decodeGSI(gsi.data, heights)
     let hasSea = na > 0
+    let sea: Uint8Array | undefined
     if (na > 0) {
+      sea = new Uint8Array(DEM_SIZE * DEM_SIZE)
       // Fill gaps (sea / outside Japan) from Terrarium; clamp bathymetry.
       const ter = await fetchImageData(TERRARIUM(t)).catch(() => null)
       const tmp = new Float32Array(DEM_SIZE * DEM_SIZE)
@@ -83,6 +87,7 @@ export class DemProvider {
         if (Number.isNaN(heights[i])) {
           const v = ter ? tmp[i] : SEA_FLOOR
           heights[i] = v <= 0.5 ? SEA_FLOOR : v
+          if (v <= 0.5) sea[i] = 1
         }
       }
     }
@@ -94,7 +99,7 @@ export class DemProvider {
       if (h > maxH) maxH = h
       if (h <= 0) hasSea = true
     }
-    return { id: t, heights, hasSea, minH, maxH }
+    return { id: t, heights, hasSea, sea, minH, maxH }
   }
 
   /** Bilinear height at a point from a specific DEM tile (must be loaded). */
@@ -126,6 +131,26 @@ export class DemProvider {
       if (t) return DemProvider.sampleTile(t, lon, lat)
     }
     return NaN
+  }
+
+  /** How much of the neighbourhood of a point is open sea (0..1, bilinear). */
+  seaAt(lat: number, lon: number, maxZoom = DEM_MAX_ZOOM): number {
+    for (let z = maxZoom; z >= 6; z--) {
+      const { x, y } = lonLatToTileXY(lon, lat, z)
+      const t = this.cache.get(`${z}/${Math.floor(x)}/${Math.floor(y)}`)
+      if (!t) continue
+      if (!t.sea) return 0
+      const px = Math.min(DEM_SIZE - 1.001, Math.max(0, (x - t.id.x) * DEM_SIZE - 0.5))
+      const py = Math.min(DEM_SIZE - 1.001, Math.max(0, (y - t.id.y) * DEM_SIZE - 0.5))
+      const ix = Math.floor(px)
+      const iy = Math.floor(py)
+      const fx = px - ix
+      const fy = py - iy
+      const m = t.sea
+      const i0 = iy * DEM_SIZE + ix
+      return (m[i0] * (1 - fx) + m[i0 + 1] * fx) * (1 - fy) + (m[i0 + DEM_SIZE] * (1 - fx) + m[i0 + DEM_SIZE + 1] * fx) * fy
+    }
+    return 0
   }
 
   /** Ensure the z14 tile under a point is loaded, then return exact height. */

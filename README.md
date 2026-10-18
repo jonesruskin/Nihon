@@ -33,9 +33,9 @@ real population and station ridership driving the crowds, and the real weather r
   spring and autumn colours in November, by latitude and altitude. Woods are filled in at true
   forest density around you — cedar plantations on the mountains, broadleaf groves in the lowlands.
 - **Be a tourist** — vending machines (hot drinks in winter), konbini, ramen with ticket machines,
-  izakaya, kissaten, shrines (purify, 二礼二拍手一礼, omikuji, goshuin), temples, onsen, hotels and
-  ryokan. Collect station stamps and shrine seals; fill your discovery journal (発見帳) with 33
-  cultural notes that unlock as you experience them.
+  izakaya, kissaten, souvenir shops selling each prefecture’s 名物, game centres, karaoke, shrines
+  (purify, 二礼二拍手一礼, omikuji, goshuin), temples, onsen, hotels and ryokan. Collect station
+  stamps and shrine seals; fill your discovery journal (発見帳) with 35 cultural notes that unlock as you experience them.
 - **Phone** (<kbd>Tab</kbd>) — wallet, journal, stamp book, and settings for time of day, season,
   weather and graphics. **Photo mode** (<kbd>P</kbd>, <kbd>Space</kbd> to save).
 

@@ -257,6 +257,10 @@ export class Game {
         this.clock.set(new Date(next.getTime() + (j.hourFloat >= 7 ? 86400e3 : 0)))
       },
       sound: (n) => this.sound.play(n),
+      prefecture: () => {
+        const code = this.address.last?.prefCode
+        return PREFECTURES.find((x) => x.code === code) ?? null
+      },
     })
     this.phone = new Phone(ui, {
       wallet: () => this.wallet,
@@ -293,6 +297,12 @@ export class Game {
     this.placed.onColliders = (c) => {
       this.colliders.removePrefix('placed')
       if (c.length) this.colliders.addCylinders('placed', this.placed.root, c, 1500)
+    }
+    const probe = new Vector3()
+    this.player.canEnter = (x, z) => {
+      probe.set(x, this.player.feet.y, z)
+      const g = this.world.geodeticFromWorld(probe)
+      return !this.terrain.isSea(g.lat, g.lon)
     }
     this.forest.onColliders = (c) => {
       this.colliders.removePrefix('forest')
@@ -473,7 +483,9 @@ export class Game {
     const ground = this.terrain.heightAt(lat, lon)
     let at = this.world.worldFromGeodetic(lat, lon, ground)
     this.pipeline.scene.updateMatrixWorld(true)
-    at = this.nearestWalkable(at) ?? at
+    // Dropped at sea (a map click offshore, the torii at Itsukushima): wade
+    // ashore to the nearest path instead.
+    at = this.nearestWalkable(at) ?? (this.terrain.isSea(lat, lon) ? this.nearestWalkable(at, 1500) : null) ?? at
     this.colliders.activateNow(at)
     // Land on the street surface (or bridge deck) right there.
     const top = this.physics.groundBelow(at.x, at.y + 3, at.z, 10)
@@ -924,6 +936,7 @@ export class Game {
         hotspot,
       })
     }
+    this.crowd.player = this.mode === 'onfoot' && this.player.body ? this.player.feet : null
     this.crowd.update(dt, at, this.pedDensity, this.elapsed)
     this.crowdTarget = this.crowd.target
     if (this.nearPeople.max > 0) this.nearPeople.update(dt, this.pipeline.camera.position, this.crowd.nearest(this.pipeline.camera.position, this.nearPeople.max + 2))

@@ -33,9 +33,9 @@ export class WeatherService {
   private async fetch(key: string, lat: number, lon: number, date: Date): Promise<void> {
     const day = jstDay(date)
     const ageDays = (Date.now() - date.getTime()) / 86400e3
-    // The forecast API covers the last ~90 days and the next two weeks; the
-    // archive covers everything since 1940.
-    const base = ageDays < 85 && ageDays > -15 ? 'https://api.open-meteo.com/v1/forecast' : 'https://archive-api.open-meteo.com/v1/archive'
+    // The forecast API covers the last few days and the next two weeks (older
+    // hours come back empty); the reanalysis archive covers 1940 to ~5 days ago.
+    const base = ageDays < 6 && ageDays > -15 ? 'https://api.open-meteo.com/v1/forecast' : 'https://archive-api.open-meteo.com/v1/archive'
     const url = `${base}?latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}&hourly=${VARS}&start_date=${day}&end_date=${day}&timezone=Asia%2FTokyo&wind_speed_unit=ms`
     try {
       const ctl = new AbortController()
@@ -48,6 +48,9 @@ export class WeatherService {
       const hours = new Map<string, WeatherNow>()
       const live = Math.abs(ageDays) < 1
       for (let i = 0; i < h.time.length; i++) {
+        // Hours the model has no data for come back as null: leave them to
+        // the climate (a null is not 15 °C and clear - not in Naha in August).
+        if (h.temperature_2m[i] == null || h.weather_code[i] == null) continue
         hours.set(String(h.time[i]).slice(0, 13), {
           code: h.weather_code[i] ?? 0,
           cloud: (h.cloud_cover[i] ?? 0) / 100,

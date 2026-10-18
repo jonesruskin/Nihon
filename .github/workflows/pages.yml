@@ -2,7 +2,8 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    # main once it exists; until then the working branch is the repo's default.
+    branches: [main, claude/cool-clarke-lm371o]
   workflow_dispatch:
 
 permissions:

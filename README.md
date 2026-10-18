@@ -20,12 +20,18 @@ real population and station ridership driving the crowds, and the real weather r
   the city go by, take the driver's-cab view, or skip ahead (<kbd>T</kbd>). Subways run in tunnels with
   station halls; trains run on the real track geometry, on viaducts and under catenary.
 - **Taxis and buses** — hail a taxi (<kbd>H</kbd>), pick a destination on the map, watch the Tokyo meter.
+  Buses follow the local rules: a flat fare paid at the front as you board in Tokyo, Yokohama,
+  Kawasaki and Nagoya; flat fares paid on the way out in Kyoto and Osaka; and everywhere else the
+  rural system — board at the rear, take a numbered ticket (整理券), read your fare off the board.
 - **Crowds that match reality** — pedestrians at the true local density for the hour (packed Shibuya
   at 18:00, a handful in a mountain village), walking the real sidewalks and keeping left. At
-  Shibuya the cars all stop and people flood the Scramble in every direction.
+  Shibuya the cars all stop and people flood the Scramble in every direction. Everyone, you
+  included, dresses for the actual temperature: T-shirts and white shirts in August, jackets and
+  long sleeves in January.
 - **Weather and seasons** — live weather at your spot (or the recorded weather for any past date):
   clouds, rain with wet streets and umbrellas, snow that settles, fog, typhoons; the sakura front in
-  spring and autumn colours in November, by latitude and altitude.
+  spring and autumn colours in November, by latitude and altitude. Woods are filled in at true
+  forest density around you — cedar plantations on the mountains, broadleaf groves in the lowlands.
 - **Be a tourist** — vending machines (hot drinks in winter), konbini, ramen with ticket machines,
   izakaya, kissaten, shrines (purify, 二礼二拍手一礼, omikuji, goshuin), temples, onsen, hotels and
   ryokan. Collect station stamps and shrine seals; fill your discovery journal (発見帳) with 33
@@ -90,8 +96,8 @@ python3 -I scripts/bake-population.py kontur_population_JP.gpkg public/data/popu
 # PLATEAU city index
 node scripts/bake-plateau.mjs
 # Characters and crowd LODs (Blender 4.2 + MPFB2)
-blender -b --python scripts/blender/make_humans.py
-blender -b --python scripts/blender/make_crowd.py -- public/models/people public/models/crowd
+blender -b --python scripts/blender/make_humans.py -- --out public/models/people --mocap <cmu-bvh-dir> [--only a,b]
+blender -b --python scripts/blender/make_crowd.py -- public/models/people public/models/crowd [a,b]
 ```
 
 The Wikidata CSVs come from two SPARQL queries (stations: `wdt:P31/wdt:P279* wd:Q55488` in Japan with

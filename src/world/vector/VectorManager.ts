@@ -71,7 +71,8 @@ export class VectorManager {
   private rr = 0
   private mats: Record<string, Material>
   private props: Record<string, PropModel> = {}
-  private trees: PropModel[] = []
+  /** Tree models by TREE_TYPES index (shared with the forest fill). */
+  trees: PropModel[] = []
   private lastCull = 0
   private tmp = new Vector3()
   nearRadius = 1500

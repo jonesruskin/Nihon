@@ -22,6 +22,8 @@ export class ForestFill {
   private center = new Vector3(Infinity, 0, Infinity)
   private sig = ''
   count = 0
+  /** Trunks near the player, for physics: [x, base y, z, half height, radius]. */
+  onColliders: ((c: Array<[number, number, number, number, number]>) => void) | null = null
 
   constructor(models: PropModel[], capacity = 7000) {
     this.root.name = 'forest-fill'
@@ -70,6 +72,7 @@ export class ForestFill {
     const byType = new Map<number, { near: InstancedMesh; far: InstancedMesh }>()
     for (const im of this.near) byType.set(im.userData.type as number, { near: im, far: this.far.find((f) => f.userData.type === im.userData.type)! })
     for (const im of [...this.near, ...this.far]) cursor.set(im, 0)
+    const trunks: Array<[number, number, number, number, number]> = []
 
     for (const t of tiles) {
       const woods = t.build.woods
@@ -152,6 +155,7 @@ export class ForestFill {
               w.y = y - 0.1
               im.setMatrixAt(i, m4.compose(w, q, scl.set(s, s, s)))
               cursor.set(im, i + 1)
+              if (d < 60) trunks.push([w.x, w.y, w.z, 3, (type === 5 ? 0.08 : 0.24) * s])
             }
           }
         }
@@ -163,6 +167,7 @@ export class ForestFill {
       im.instanceMatrix.needsUpdate = true
       this.count += n
     }
+    this.onColliders?.(trunks)
   }
 }
 

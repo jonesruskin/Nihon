@@ -55,6 +55,14 @@ export interface NavPath {
   pts: Float32Array // xyz triplets (anchor frame)
 }
 
+/** A wood polygon, for filling in forest at true density near the player. */
+export interface WoodArea {
+  rings: Float32Array[] // xz pairs (anchor frame); outer ring first, then holes
+  bbox: [number, number, number, number] // minX, minZ, maxX, maxZ
+  /** Mountain or plantation forest (sugi/hinoki) rather than lowland wood. */
+  mountain: boolean
+}
+
 export interface TileBuild {
   id: TileId
   anchor: { lat: number; lon: number }
@@ -71,6 +79,7 @@ export interface TileBuild {
   pois: Poi[]
   places: Place[]
   paths: NavPath[]
+  woods: WoodArea[]
   stats: Record<string, number>
 }
 
@@ -135,6 +144,7 @@ export function buildTile(req: BuildRequest): TileBuild {
   const wires: number[] = []
   const pois: Poi[] = []
   const paths: NavPath[] = []
+  const woods: WoodArea[] = []
   const stats: Record<string, number> = {}
 
   const V = (x: number, n: number, h: number): [number, number, number] => [x, h - drop(x, n), -n]
@@ -707,7 +717,7 @@ export function buildTile(req: BuildRequest): TileBuild {
   }
   const spread = Math.max(1, Math.sqrt(wanted / Math.max(1, treeBudget)))
   if (lc) {
-    for (let i = 0; i < lc.length && treeCount < treeBudget; i++) {
+    for (let i = 0; i < lc.length; i++) {
       const f = lc.feature(i)
       const cls = String(f.properties.class)
       const sub = String(f.properties.subclass)
@@ -718,6 +728,31 @@ export function buildTile(req: BuildRequest): TileBuild {
       for (const poly of classifyRings(f.loadGeometry())) {
         const rings = poly.map((r) => r.map((p) => extentToLocal(lc.extent, p.x, p.y)))
         const outer = rings[0]
+        if (isWood && outer.length >= 3) {
+          const wr = rings.map((r) => {
+            const a = new Float32Array(r.length * 2)
+            r.forEach((p, k) => {
+              const v = V(p[0], p[1], 0)
+              a[k * 2] = v[0]
+              a[k * 2 + 1] = v[2]
+            })
+            return a
+          })
+          const bb: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity]
+          for (let k = 0; k < wr[0].length; k += 2) {
+            bb[0] = Math.min(bb[0], wr[0][k])
+            bb[1] = Math.min(bb[1], wr[0][k + 1])
+            bb[2] = Math.max(bb[2], wr[0][k])
+            bb[3] = Math.max(bb[3], wr[0][k + 1])
+          }
+          let cx = 0
+          let cy = 0
+          for (const p of outer) {
+            cx += p[0] / outer.length
+            cy += p[1] / outer.length
+          }
+          woods.push({ rings: wr, bbox: bb, mountain: sub === 'forest' || ground(Math.max(-half, Math.min(half, cx)), Math.max(-half, Math.min(half, cy))) > 150 })
+        }
         let minX = Infinity
         let minY = Infinity
         let maxX = -Infinity
@@ -732,6 +767,7 @@ export function buildTile(req: BuildRequest): TileBuild {
         minY = Math.max(minY, -half)
         maxX = Math.min(maxX, half)
         maxY = Math.min(maxY, half)
+        if (treeCount >= treeBudget) continue
         for (let gx = Math.ceil(minX / spacing) * spacing; gx < maxX; gx += spacing) {
           for (let gy = Math.ceil(minY / spacing) * spacing; gy < maxY; gy += spacing) {
             if (treeCount >= treeBudget) break
@@ -1025,6 +1061,7 @@ export function buildTile(req: BuildRequest): TileBuild {
     pois,
     places,
     paths,
+    woods,
     stats,
   }
 }
@@ -1041,7 +1078,10 @@ function classifyRings(rings: Array<Array<{ x: number; y: number }>>): Array<Arr
     // Spec: exterior rings are clockwise in tile space (y down).
     const outer = a < 0
     if (outer || !cur) {
-      cur = [r]
+      // A polygon that opens with a hole-wound ring (invalid, but it happens
+      // in generalised tiles) would get inward-facing walls: invisible from
+      // the street, with the roof seemingly floating. Re-wind it.
+      cur = [outer ? r : [...r].reverse()]
       out.push(cur)
     } else cur.push(r)
   }

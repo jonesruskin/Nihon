@@ -35,6 +35,7 @@ import { ActivityPanel, SpotIndex, spotPrompt, type Spot } from '../tourism/Acti
 import { Phone } from '../ui/Phone'
 import { Soundscape } from '../audio/Soundscape'
 import { PlacedProps } from '../world/props/PlacedProps'
+import { ForestFill } from '../world/props/ForestFill'
 import { NearPeople } from '../people/NearPeople'
 import { AddressLookup } from '../core/address'
 import { busRule, distanceFare, type BusRule } from '../transit/busFare'
@@ -119,6 +120,8 @@ export class Game {
   readonly phone: Phone
   readonly sound = new Soundscape()
   readonly placed = new PlacedProps()
+  forest!: ForestFill
+  private forestTimer = 0
   readonly nearPeople: NearPeople
   readonly address = new AddressLookup()
   private currentPref = 0
@@ -176,6 +179,8 @@ export class Game {
     this.player = new Player(this.physics)
     this.rig = new CameraRig(this.pipeline.camera, this.physics)
     const scene = this.pipeline.scene
+    this.forest = new ForestFill(this.vector.trees)
+    scene.add(this.forest.root)
     scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root, this.traffic.root, this.crowd.root, this.weather.precip.mesh, this.placed.root, this.nearPeople.root)
     const wp = new URLSearchParams(location.search).get('weather')
     if (wp) this.weather.preset = wp as WeatherPreset
@@ -289,6 +294,10 @@ export class Game {
       this.colliders.removePrefix('placed')
       if (c.length) this.colliders.addCylinders('placed', this.placed.root, c, 1500)
     }
+    this.forest.onColliders = (c) => {
+      this.colliders.removePrefix('forest')
+      if (c.length) this.colliders.addCylinders('forest', this.forest.root, c, 400)
+    }
     this.placeScrambles()
     this.traffic.graph.allRed = (pos) =>
       this.crowd.scrambles.some((sc) => sc.walkTime() >= 0 && Math.hypot(pos.x - sc.center.x, pos.z - sc.center.z) < sc.radius + 18)
@@ -299,6 +308,7 @@ export class Game {
       this.crowd.rebase(delta)
       this.spots.invalidate()
       this.placed.invalidate()
+      this.forest.invalidate()
       this.pipeline.scene.updateMatrixWorld(true)
       this.physics.syncStatics()
       if (this.player.body) this.player.rebase(delta)
@@ -489,6 +499,25 @@ export class Game {
    * Don't start the player nose-to-wall: if the requested heading is blocked
    * within a few metres, turn to the most open direction nearest to it.
    */
+  /** Fill the woods around the player at real forest density. */
+  private updateForest(at: Vector3): void {
+    const probe = new Vector3()
+    this.forest.update(
+      at,
+      this.vector.readyTiles,
+      (x, z) => {
+        probe.set(x, at.y, z)
+        const g = this.world.geodeticFromWorld(probe)
+        const h = this.terrain.heightAt(g.lat, g.lon)
+        return Number.isFinite(h) ? this.world.worldFromGeodetic(g.lat, g.lon, h).y : null
+      },
+      (x, y, z) => {
+        const top = this.physics.groundBelow(x, y + 30, z, 60)
+        return top !== null && top > y + 1.5
+      },
+    )
+  }
+
   /** The tourist dresses for the weather too: a jacket and long sleeves
    *  below ~15°C, a T-shirt above ~18°C (in between, keep what you wear). */
   private async dressAvatar(): Promise<void> {
@@ -770,6 +799,11 @@ export class Game {
     if (this.placedTimer <= 0 && this.mode !== 'loading') {
       this.placedTimer = 3
       this.placed.update(this.vector.readyTiles)
+    }
+    this.forestTimer -= dt
+    if (this.forestTimer <= 0 && this.mode !== 'loading' && this.mode !== 'train') {
+      this.forestTimer = 0.5
+      this.updateForest(focus)
     }
     this.updateDiscoveries(dt)
     this.updateSound(dt)
@@ -1328,10 +1362,23 @@ export class Game {
       peds: this.crowd.peds.length,
       pedTarget: Math.round(this.crowdTarget),
       pedPerHa: Math.round(this.pedDensity * 10) / 10,
+      forestTrees: this.forest.count,
     }
   }
 
   /** Debug: draw the pedestrian network (green foot, blue sidewalk, yellow road edge, red scramble). */
+  /** Debug: what is under a screen point (normalised device coords)? */
+  debugPickScreen(nx: number, ny: number): string[] {
+    const rc = new Raycaster()
+    rc.setFromCamera({ x: nx, y: ny } as never, this.pipeline.camera)
+    const shown = (o: import('three').Object3D | null): boolean => !o || (o.visible && shown(o.parent))
+    return rc.intersectObjects(this.pipeline.scene.children, true).filter((h) => shown(h.object)).slice(0, 6).map((h) => {
+      const names: string[] = []
+      for (let o: import('three').Object3D | null = h.object; o; o = o.parent) if (o.name) names.push(o.name)
+      return `${h.distance.toFixed(1)}m ${names.join(' < ')}`
+    })
+  }
+
   debugCrowdLines(): number {
     const d = this.crowd.debugLines()
     const g = new BufferGeometry()

@@ -1,0 +1,134 @@
+[
+ {
+  "name": "player_m",
+  "gender": "m",
+  "age": 0.5,
+  "season": "summer"
+ },
+ {
+  "name": "player_f",
+  "gender": "f",
+  "age": 0.48,
+  "season": "summer"
+ },
+ {
+  "name": "salaryman_a",
+  "gender": "m",
+  "age": 0.56,
+  "season": "any"
+ },
+ {
+  "name": "salaryman_b",
+  "gender": "m",
+  "age": 0.66,
+  "season": "any"
+ },
+ {
+  "name": "salaryman_c",
+  "gender": "m",
+  "age": 0.5,
+  "season": "any"
+ },
+ {
+  "name": "office_f",
+  "gender": "f",
+  "age": 0.52,
+  "season": "any"
+ },
+ {
+  "name": "young_f",
+  "gender": "f",
+  "age": 0.42,
+  "season": "summer"
+ },
+ {
+  "name": "young_m",
+  "gender": "m",
+  "age": 0.44,
+  "season": "summer"
+ },
+ {
+  "name": "student_f",
+  "gender": "f",
+  "age": 0.36,
+  "season": "summer"
+ },
+ {
+  "name": "casual_m",
+  "gender": "m",
+  "age": 0.6,
+  "season": "any"
+ },
+ {
+  "name": "elder_m",
+  "gender": "m",
+  "age": 0.86,
+  "season": "any"
+ },
+ {
+  "name": "elder_f",
+  "gender": "f",
+  "age": 0.86,
+  "season": "summer"
+ },
+ {
+  "name": "tourist_m",
+  "gender": "m",
+  "age": 0.5,
+  "season": "summer"
+ },
+ {
+  "name": "tourist_f",
+  "gender": "f",
+  "age": 0.47,
+  "season": "summer"
+ },
+ {
+  "name": "player_m_w",
+  "gender": "m",
+  "age": 0.5,
+  "season": "winter"
+ },
+ {
+  "name": "player_f_w",
+  "gender": "f",
+  "age": 0.48,
+  "season": "winter"
+ },
+ {
+  "name": "young_m_w",
+  "gender": "m",
+  "age": 0.42,
+  "season": "winter"
+ },
+ {
+  "name": "young_m2_w",
+  "gender": "m",
+  "age": 0.47,
+  "season": "winter"
+ },
+ {
+  "name": "young_f_w",
+  "gender": "f",
+  "age": 0.42,
+  "season": "winter"
+ },
+ {
+  "name": "student_f_w",
+  "gender": "f",
+  "age": 0.37,
+  "season": "winter"
+ },
+ {
+  "name": "elder_f_w",
+  "gender": "f",
+  "age": 0.84,
+  "season": "winter"
+ },
+ {
+  "name": "tourist_m_w",
+  "gender": "m",
+  "age": 0.5,
+  "season": "winter"
+ }
+]

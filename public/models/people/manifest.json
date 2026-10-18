@@ -1,0 +1,266 @@
+[
+ {
+  "name": "player_m",
+  "file": "player_m.glb",
+  "gender": "m",
+  "age": 0.5,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "summer"
+ },
+ {
+  "name": "player_f",
+  "file": "player_f.glb",
+  "gender": "f",
+  "age": 0.48,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "summer"
+ },
+ {
+  "name": "salaryman_a",
+  "file": "salaryman_a.glb",
+  "gender": "m",
+  "age": 0.56,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "any"
+ },
+ {
+  "name": "salaryman_b",
+  "file": "salaryman_b.glb",
+  "gender": "m",
+  "age": 0.66,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "any"
+ },
+ {
+  "name": "salaryman_c",
+  "file": "salaryman_c.glb",
+  "gender": "m",
+  "age": 0.5,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "any"
+ },
+ {
+  "name": "office_f",
+  "file": "office_f.glb",
+  "gender": "f",
+  "age": 0.52,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "any"
+ },
+ {
+  "name": "young_f",
+  "file": "young_f.glb",
+  "gender": "f",
+  "age": 0.42,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "summer"
+ },
+ {
+  "name": "young_m",
+  "file": "young_m.glb",
+  "gender": "m",
+  "age": 0.44,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "summer"
+ },
+ {
+  "name": "student_f",
+  "file": "student_f.glb",
+  "gender": "f",
+  "age": 0.36,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "summer"
+ },
+ {
+  "name": "casual_m",
+  "file": "casual_m.glb",
+  "gender": "m",
+  "age": 0.6,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "any"
+ },
+ {
+  "name": "elder_m",
+  "file": "elder_m.glb",
+  "gender": "m",
+  "age": 0.86,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "any"
+ },
+ {
+  "name": "elder_f",
+  "file": "elder_f.glb",
+  "gender": "f",
+  "age": 0.86,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "summer"
+ },
+ {
+  "name": "tourist_m",
+  "file": "tourist_m.glb",
+  "gender": "m",
+  "age": 0.5,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "summer"
+ },
+ {
+  "name": "tourist_f",
+  "file": "tourist_f.glb",
+  "gender": "f",
+  "age": 0.47,
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  },
+  "season": "summer"
+ },
+ {
+  "name": "player_m_w",
+  "file": "player_m_w.glb",
+  "gender": "m",
+  "age": 0.5,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "player_f_w",
+  "file": "player_f_w.glb",
+  "gender": "f",
+  "age": 0.48,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "young_m_w",
+  "file": "young_m_w.glb",
+  "gender": "m",
+  "age": 0.42,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "young_m2_w",
+  "file": "young_m2_w.glb",
+  "gender": "m",
+  "age": 0.47,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "young_f_w",
+  "file": "young_f_w.glb",
+  "gender": "f",
+  "age": 0.42,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "student_f_w",
+  "file": "student_f_w.glb",
+  "gender": "f",
+  "age": 0.37,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "elder_f_w",
+  "file": "elder_f_w.glb",
+  "gender": "f",
+  "age": 0.84,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ },
+ {
+  "name": "tourist_m_w",
+  "file": "tourist_m_w.glb",
+  "gender": "m",
+  "age": 0.5,
+  "season": "winter",
+  "clips": {
+   "walk": 1.1,
+   "run": 0.7666666666666667,
+   "idle": 0.1
+  }
+ }
+]

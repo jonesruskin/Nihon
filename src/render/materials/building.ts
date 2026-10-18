@@ -32,6 +32,7 @@ varying vec3 vWNrm;
 varying float vBh;
 flat varying float vSeed;
 flat varying float vKind;
+flat varying float vFh;
 float bhash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float bhash1(float p) { return fract(sin(p * 91.345) * 47453.5453); }
 `
@@ -40,6 +41,7 @@ const vertexHead = /* glsl */ `
 attribute float bh;
 attribute float seed;
 attribute float kind;
+attribute float fh;
 `
 
 /**
@@ -49,7 +51,7 @@ attribute float kind;
 export function createBuildingMaterial(): MeshStandardMaterial {
   const m = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0 })
   m.name = 'facade'
-  m.customProgramCacheKey = () => 'nihon-facade-v1'
+  m.customProgramCacheKey = () => 'nihon-facade-v2'
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, buildingUniforms)
     shader.vertexShader = shader.vertexShader
@@ -61,7 +63,8 @@ export function createBuildingMaterial(): MeshStandardMaterial {
         vWNrm = normalize(mat3(modelMatrix) * objectNormal);
         vBh = bh;
         vSeed = seed;
-        vKind = kind;`,
+        vKind = kind;
+        vFh = fh;`,
       )
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${common}\n${facadeFns}`)
@@ -150,43 +153,42 @@ FacadeSample facade() {
   vec2 t = normalize(vec2(-n.z, n.x) + 1e-5);
   float u = dot(vWPos.xz, t);
   float v = vBh;
-  bool glassTower = kind > 2.5 && kind < 3.5;
-  bool house = kind > 0.5 && kind < 1.5;
-  bool industrial = kind > 3.5 && kind < 4.5;
-  bool wood = kind > 4.5;
+  bool house = kind == 1.0;
+  bool glassTower = kind == 3.0;
+  bool industrial = kind == 4.0;
+  bool wood = kind == 5.0;
+  bool apartment = kind == 6.0;
+  bool commercial = kind == 7.0;
 
-  float floorH = house ? 2.9 : (glassTower ? 4.0 : mix(3.2, 3.9, bhash1(s * 3.1)));
-  float bay = house ? mix(2.6, 3.6, bhash1(s * 5.7)) : (glassTower ? 1.5 : mix(1.8, 3.4, bhash1(s * 7.3)));
+  float floorH = vFh > 0.0 ? vFh : (house ? 2.9 : (glassTower ? 4.0 : (apartment ? 2.95 : mix(3.2, 3.9, bhash1(s * 3.1)))));
+  float bay = house ? mix(2.6, 3.6, bhash1(s * 5.7)) : (glassTower ? 1.5 : (apartment ? mix(5.5, 7.0, bhash1(s * 7.3)) : mix(1.8, 3.4, bhash1(s * 7.3))));
   float fl = floor(v / floorH);
   float fy = fract(v / floorH);
   float bx = floor(u / bay);
   float fx = fract(u / bay);
 
+  // How many pixels a window bay spans: far away the per-window detail is
+  // sub-pixel and must fade to its average, or it shimmers into noise.
+  float fw = max(fwidth(u / bay), fwidth(v / floorH));
+
   vec3 wall = palette(bhash1(s * 11.7), kind);
   // Low-frequency weathering: rain streaks under windows, dirt near street.
   float streak = bhash(vec2(floor(u * 1.5), floor(v * 0.2))) * 0.05;
   wall *= 1.0 - streak - 0.08 * smoothstep(3.0, 0.0, v);
-  if (wood) wall = vec3(0.30, 0.20, 0.13);
 
   float winW = house ? 0.42 : (glassTower ? 0.9 : mix(0.45, 0.75, bhash1(s * 13.1)));
   float winH = house ? 0.45 : (glassTower ? 0.82 : mix(0.45, 0.65, bhash1(s * 17.9)));
   float wx = abs(fx - 0.5) * 2.0;
   float wy = abs(fy - 0.55) * 2.0;
   float isWin = (1.0 - aastep(winW, wx)) * (1.0 - aastep(winH, wy));
-  // Houses: only some bays have windows; ground floor of commercial = shopfront.
   if (house) isWin *= step(0.35, bhash(vec2(bx, fl) + s));
-  bool shop = !house && !glassTower && !industrial && v < 4.2 && bhash1(s * 23.0) > 0.25;
+  bool vernacular = kind >= 7.5; // machiya, farmhouse, shrine, Ryukyu
+  bool shop = !vernacular && (commercial || (!house && !glassTower && !industrial && !apartment && !wood && bhash1(s * 23.0) > 0.25)) && v < 4.2;
   if (shop) { isWin = (1.0 - aastep(0.92, abs(fx - 0.5) * 2.0)) * aastep(0.08, v) * (1.0 - aastep(3.3, v)); }
   if (industrial) isWin *= aastep(0.6, fy) * (1.0 - aastep(0.85, fy)) * step(0.5, bhash1(bx + s));
-  if (wood) isWin = 0.0;
-  // Far away the pattern is sub-pixel: fade to its average to avoid moire.
-  float fw = max(fwidth(u / bay), fwidth(v / floorH));
-  isWin = mix(isWin, winW * winH * (house ? 0.6 : 1.0), smoothstep(0.2, 0.55, fw));
-  // Horizontal spandrel band (common on Japanese mid-rises).
-  float band = (!house && !glassTower) ? aastep(0.9, fy) * 0.12 : 0.0;
+  float band = (!house && !glassTower && !apartment) ? aastep(0.9, fy) * 0.12 : 0.0;
 
-  // Glass shows a mix of sky reflection and interiors: blinds, curtains,
-  // ceiling lights. Each pane gets its own interior.
+  // Glass shows a mix of sky reflection and interiors.
   float pane = bhash(vec2(bx * 3.7 + s * 50.0, fl * 1.3 + s * 20.0));
   vec3 interior = mix(vec3(0.10, 0.11, 0.12), vec3(0.42, 0.40, 0.36), step(0.62, pane) * fract(pane * 13.0));
   vec3 glass = mix(vec3(0.13, 0.16, 0.19), interior, 0.55);
@@ -194,22 +196,182 @@ FacadeSample facade() {
     glass = mix(vec3(0.16, 0.22, 0.27), vec3(0.24, 0.28, 0.31), bhash1(s * 29.0));
     wall = mix(vec3(0.30, 0.32, 0.34), vec3(0.55, 0.56, 0.58), bhash1(s * 31.0));
   }
-  o.albedo = mix(wall * (1.0 - band), glass, isWin);
-  o.roughness = mix(mix(0.82, 0.35, uWet), 0.04, isWin);
-  o.metalness = isWin * (glassTower ? 0.55 : 0.3);
+  vec3 albedo = mix(wall * (1.0 - band), glass, isWin);
+  float rough = mix(mix(0.82, 0.35, uWet), 0.04, isWin);
+  float metal = isWin * (glassTower ? 0.55 : 0.3);
+  vec3 emis = vec3(0.0);
+
+  // マンション: continuous balconies with slab edges, frosted railing panels,
+  // sliding glass doors behind, unit partitions and the odd AC unit.
+  if (apartment && v > 3.0) {
+    float slab = 1.0 - aastep(0.07, fy);
+    float rail = aastep(0.07, fy) * (1.0 - aastep(0.4, fy));
+    float door = aastep(0.45, fy) * (1.0 - aastep(0.93, fy)) * (1.0 - aastep(0.84, wx));
+    float part = 1.0 - aastep(0.025, min(fx, 1.0 - fx));
+    vec3 slabC = vec3(0.78, 0.77, 0.74);
+    vec3 railC = mix(vec3(0.62, 0.64, 0.66), vec3(0.72, 0.70, 0.66), bhash1(s * 41.0));
+    float curtain = step(0.45, pane);
+    vec3 doorC = mix(vec3(0.12, 0.14, 0.16), mix(vec3(0.55, 0.52, 0.46), vec3(0.42, 0.45, 0.5), fract(pane * 7.0)), curtain * 0.6);
+    // AC outdoor unit on some balconies
+    float ac = step(0.6, bhash(vec2(bx, fl) + s * 3.0)) * aastep(0.12, fx) * (1.0 - aastep(0.27, fx)) * aastep(0.4, fy) * (1.0 - aastep(0.62, fy));
+    albedo = wall;
+    albedo = mix(albedo, doorC, door);
+    albedo = mix(albedo, railC, rail);
+    albedo = mix(albedo, vec3(0.86, 0.86, 0.84), ac);
+    albedo = mix(albedo, slabC, max(slab, part));
+    rough = mix(0.8, 0.08, door);
+    metal = door * 0.25;
+    isWin = door;
+  }
+
+  // 雑居ビル signage: vertical kanban near one edge and sign bands per
+  // floor — the visual signature of Shinjuku, Shibuya, Dotonbori.
+  if (commercial && v > 3.6) {
+    float signRow = step(0.55, bhash(vec2(fl, s * 9.0)));
+    float bandSign = signRow * aastep(0.02, fy) * (1.0 - aastep(0.28, fy));
+    float edge = aastep(0.0, fx) * (1.0 - aastep(0.18, fx)) * step(0.5, bhash1(bx * 0.37 + s * 5.0));
+    float hue = bhash(vec2(bx, fl) + s * 13.0);
+    vec3 signC = hue < 0.25 ? vec3(0.85, 0.12, 0.10) : hue < 0.45 ? vec3(0.95, 0.75, 0.12) : hue < 0.6 ? vec3(0.12, 0.35, 0.8) : hue < 0.75 ? vec3(0.95, 0.95, 0.92) : hue < 0.88 ? vec3(0.1, 0.55, 0.3) : vec3(0.85, 0.3, 0.6);
+    // Distant streets of signs blend into one warm average.
+    signC = mix(signC, vec3(0.7, 0.45, 0.35), smoothstep(0.15, 0.45, fw));
+    float sign = max(bandSign, edge * step(fy, 0.92));
+    // faux characters: blocky glyph texture inside signs, faded out before
+    // the glyph cells get smaller than a couple of pixels
+    vec2 gp = vec2(u * 2.2, v * 2.2);
+    float gfade = 1.0 - smoothstep(0.2, 0.6, max(fwidth(gp.x), fwidth(gp.y)));
+    float glyph = step(0.55, bhash(floor(gp))) * step(0.15, fract(gp.x)) * step(0.15, fract(gp.y));
+    vec3 signFace = mix(signC, vec3(1.0) - signC * 0.7, mix(0.33, glyph, gfade) * 0.8);
+    albedo = mix(albedo, signFace, sign);
+    rough = mix(rough, 0.4, sign);
+    emis += signFace * sign * mix(0.06, 0.5, uNight);
+  }
+
+  // Temples & shrines: dark timber, white plaster panels, no glass.
+  if (wood) {
+    float post = 1.0 - aastep(0.08, min(fx, 1.0 - fx));
+    float beam = 1.0 - aastep(0.06, abs(fy - 0.1)) + (1.0 - aastep(0.04, abs(fy - 0.85)));
+    vec3 timber = vec3(0.24, 0.15, 0.10);
+    vec3 plaster = vec3(0.82, 0.80, 0.74);
+    albedo = mix(plaster, timber, clamp(post + beam, 0.0, 1.0));
+    if (v < 1.0) albedo = vec3(0.45, 0.43, 0.40);
+    rough = 0.85;
+    metal = 0.0;
+    isWin = 0.0;
+  }
+
+  float lattice = 0.0; // machiya 格子: glows warm from inside at night
+  if (kind == 8.0) {
+    // 町家: dark timber lattice (格子) on the ground floor, a small tiled
+    // eave, plaster or timber upper storey with mushiko slit windows.
+    vec3 timber = vec3(0.16, 0.095, 0.055) * (0.8 + 0.4 * bhash1(s * 3.0));
+    vec3 plaster = bhash1(s * 9.0) < 0.55 ? vec3(0.80, 0.77, 0.70) : vec3(0.58, 0.47, 0.34);
+    float bay2 = 1.82; // one ken
+    float bf = fract(u / bay2);
+    float post = 1.0 - aastep(0.06, min(bf, 1.0 - bf));
+    if (v < 2.75) {
+      float slat = aastep(0.55, fract(u / 0.075));
+      float rail = 1.0 - aastep(0.05, abs(v - 0.9)) + (1.0 - aastep(0.05, abs(v - 2.2)));
+      lattice = (1.0 - slat) * aastep(0.35, v) * (1.0 - aastep(2.45, v)) * (1.0 - post);
+      albedo = mix(timber * 0.9, timber * 0.35, lattice);
+      albedo = mix(albedo, timber * 1.2, clamp(rail + post, 0.0, 1.0));
+      // Noren curtain in the doorway of some houses.
+      float door = step(0.62, bhash1(floor(u / bay2) + s * 17.0));
+      float noren = door * aastep(1.55, v) * (1.0 - aastep(2.35, v)) * (1.0 - post);
+      albedo = mix(albedo, bhash1(s * 31.0) < 0.6 ? vec3(0.08, 0.10, 0.22) : vec3(0.42, 0.10, 0.08), noren);
+      if (v < 0.35) albedo = vec3(0.32, 0.31, 0.29); // stone plinth
+    } else if (v < 3.25) {
+      albedo = vec3(0.15, 0.15, 0.16); // 庇 eave tiles seen edge-on
+    } else {
+      float slit = (1.0 - aastep(0.5, fract(u / 0.16))) * aastep(3.9, v) * (1.0 - aastep(4.7, v)) * (1.0 - aastep(0.7, abs(bf - 0.5) * 2.0));
+      albedo = mix(plaster, timber, max(post, slit));
+    }
+    rough = 0.88;
+    metal = 0.0;
+    isWin = 0.0;
+  } else if (kind == 9.0) {
+    // 合掌造り / 茅葺 farmhouse walls: dark timber frame, white shoji paper.
+    vec3 timber = vec3(0.20, 0.13, 0.08);
+    float bf = fract(u / 1.82);
+    float frame = clamp((1.0 - aastep(0.05, min(bf, 1.0 - bf))) + (1.0 - aastep(0.05, abs(fract(v / 0.9) - 0.5) * 2.0 - 0.9)), 0.0, 1.0);
+    float shoji = aastep(0.4, v) * (1.0 - aastep(2.1, v)) * step(0.4, bhash1(floor(u / 1.82) + s * 7.0));
+    float grid = max(1.0 - aastep(0.08, abs(fract(u / 0.3) - 0.5) * 2.0 - 0.84), 1.0 - aastep(0.08, abs(fract(v / 0.3) - 0.5) * 2.0 - 0.84));
+    albedo = mix(timber, mix(vec3(0.86, 0.84, 0.78), timber, grid * 0.8), shoji);
+    albedo = mix(albedo, timber * 0.8, frame);
+    if (v < 0.4) albedo = vec3(0.35, 0.34, 0.31);
+    lattice = shoji * (1.0 - grid) * 0.7;
+    rough = 0.9;
+    metal = 0.0;
+    isWin = 0.0;
+  } else if (kind == 10.0) {
+    // 朱塗り shrine hall: vermilion posts and beams, white walls.
+    vec3 shu = vec3(0.70, 0.13, 0.05);
+    float bf = fract(u / 2.4);
+    float post = 1.0 - aastep(0.09, min(bf, 1.0 - bf));
+    float beam = (1.0 - aastep(0.05, abs(fy - 0.12))) + (1.0 - aastep(0.06, abs(v - 3.3)));
+    albedo = mix(vec3(0.88, 0.86, 0.80), shu, clamp(post + beam, 0.0, 1.0));
+    if (v < 0.6) albedo = vec3(0.42, 0.41, 0.39);
+    rough = 0.6;
+    metal = 0.0;
+    isWin = 0.0;
+  } else if (kind == 12.0) {
+    // 白木 shrine hall: unpainted, weathered cypress posts and boards.
+    vec3 hinoki = vec3(0.47, 0.35, 0.24) * (0.85 + 0.25 * bhash1(s * 5.0));
+    float bf = fract(u / 2.4);
+    float post = 1.0 - aastep(0.09, min(bf, 1.0 - bf));
+    float board = 0.9 + 0.1 * step(0.5, fract(v / 0.32));
+    albedo = mix(hinoki * board * 1.15, hinoki * 0.7, post);
+    if (v < 0.6) albedo = vec3(0.42, 0.41, 0.39);
+    rough = 0.8;
+    metal = 0.0;
+    isWin = 0.0;
+  } else if (kind == 11.0) {
+    // Ryukyu house: weathered timber, coral-stone wall at the base.
+    float stone = 1.0 - aastep(1.1, v);
+    vec2 cs = floor(vec2(u / 0.45 + floor(v / 0.25) * 0.5, v / 0.25));
+    vec3 coral = vec3(0.68, 0.64, 0.55) * (0.8 + 0.3 * bhash(cs + s));
+    albedo = mix(vec3(0.38, 0.30, 0.22), coral, stone);
+    rough = 0.9;
+    metal = 0.0;
+    isWin = 0.0;
+  }
+
+  // Far away the pattern is sub-pixel: fade to its average to avoid moire.
+  float far = vernacular ? 0.0 : smoothstep(0.15, 0.45, fw);
+  vec3 avg = mix(wall, glass, winW * winH * (house ? 0.6 : 1.0));
+  if (apartment && v > 3.0) avg = mix(wall, vec3(0.6, 0.61, 0.6), 0.55); // slabs, rails, glass doors
+  if (commercial && v > 3.6) avg = mix(avg, vec3(0.7, 0.45, 0.35), 0.3); // signs
+  if (wood) avg = vec3(0.6, 0.55, 0.48);
+  o.albedo = mix(albedo, avg, far);
+  o.roughness = rough;
+  o.metalness = metal;
 
   // Night: a believable fraction of windows lit, warm or fluorescent white.
   if (uNight > 0.01) {
     float h = bhash(vec2(bx * 1.7 + s * 91.0, fl * 3.1 + s * 13.0));
-    float occupancy = house ? 0.45 : (glassTower ? 0.55 : 0.5);
+    float occupancy = house ? 0.45 : (apartment ? 0.6 : (glassTower ? 0.55 : 0.5));
     float lit = step(h, occupancy) * isWin;
     vec3 warm = vec3(1.0, 0.72, 0.42);
     vec3 cool = vec3(0.85, 0.92, 1.0);
-    vec3 col = mix(warm, cool, step(0.5, bhash1(h * 7.0 + s)));
-    float intensity = mix(1.2, 3.0, bhash1(h * 3.0));
-    if (shop) { lit = isWin; intensity = 5.0; col = vec3(1.0, 0.9, 0.75); }
-    o.emissive = col * lit * intensity * uNight;
+    vec3 col = mix(warm, cool, step(apartment ? 0.7 : 0.5, bhash1(h * 7.0 + s)));
+    float intensity = mix(0.02, 0.09, bhash1(h * 3.0));
+    // Inside each window: ceiling light falls off downward, half-drawn
+    // curtains or blinds, and the occasional blue TV flicker.
+    float wyIn = clamp((fy - 0.55) / max(winH, 0.05) + 0.5, 0.0, 1.0);
+    float ceiling = 0.55 + 0.45 * wyIn;
+    float r2 = bhash1(h * 17.0);
+    float curtainX = r2 < 0.35 ? step(0.5 + 0.4 * (r2 / 0.35 - 0.5), abs(fx - 0.5) * 2.0) : 0.0;
+    float blinds = r2 > 0.8 ? 0.6 + 0.4 * step(0.5, fract(fy * 40.0)) : 1.0;
+    float shade = mix(1.0, 0.35, curtainX) * blinds * ceiling;
+    if (r2 > 0.72 && r2 < 0.8) { col = vec3(0.45, 0.6, 1.0); intensity *= 0.5 + 0.3 * sin(uTime * 3.0 + h * 50.0); }
+    intensity *= shade;
+    // ...and at a distance, the average glow of a building's windows.
+    float winFrac = apartment && v > 3.0 ? 0.32 : (house ? 0.6 : 1.0) * winW * winH;
+    vec3 avgGlow = mix(warm, cool, 0.45) * occupancy * 0.04 * winFrac;
+    emis += mix(col * lit * intensity, avgGlow, far) * uNight;
+    // Lantern-lit lattices and shoji in old towns.
+    emis += vec3(1.0, 0.62, 0.3) * lattice * 0.05 * uNight * step(0.3, bhash1(s * 41.0));
   }
+  o.emissive = emis;
   return o;
 }
 `
@@ -219,7 +381,7 @@ export function nightFactorFromSun(sunElevationDeg: number): number {
   return Math.min(1, Math.max(0, (2 - sunElevationDeg) / 8))
 }
 
-export const BUILDING_KIND = { generic: 0, house: 1, office: 2, glass: 3, industrial: 4, wood: 5 } as const
+export const BUILDING_KIND = { generic: 0, house: 1, office: 2, glass: 3, industrial: 4, wood: 5, apartment: 6, commercial: 7, machiya: 8, farmhouse: 9, shrine: 10, ryukyu: 11, shrinePlain: 12 } as const
 
 export function seedColor(seed: number): Color {
   return new Color().setHSL(seed, 0.2, 0.5)

@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Assets</title>
+<style>html,body{margin:0;background:#9aa;overflow:hidden;font:12px sans-serif}</style></head>
+<body><script type="module">
+import * as THREE from 'three'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
+const q = new URLSearchParams(location.search)
+const names = q.get('names').split(',')
+const base = q.get('base') ?? '/_raw/'
+const cols = Number(q.get('cols') ?? 4)
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
+renderer.setSize(innerWidth, innerHeight); renderer.setScissorTest(true)
+renderer.toneMapping = THREE.AgXToneMapping
+document.body.appendChild(renderer.domElement)
+const env = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture
+const loader = new GLTFLoader()
+const rows = Math.ceil(names.length / cols)
+const w = innerWidth / cols, h = innerHeight / rows
+for (let i = 0; i < names.length; i++) {
+  const scene = new THREE.Scene(); scene.background = new THREE.Color(0xc8d0d4); scene.environment = env
+  scene.add(new THREE.DirectionalLight(0xffffff, 2).translateX(3).translateY(5).translateZ(4))
+  let info = ''
+  try {
+    const g = await loader.loadAsync(base + names[i] + '.glb')
+    const box = new THREE.Box3().setFromObject(g.scene); const size = box.getSize(new THREE.Vector3()); const c = box.getCenter(new THREE.Vector3())
+    g.scene.position.sub(c); scene.add(g.scene)
+    info = `${names[i]} ${size.x.toFixed(2)}x${size.y.toFixed(2)}x${size.z.toFixed(2)}`
+    const r = size.length() * 0.62
+    const cam = new THREE.PerspectiveCamera(35, w / h, r / 100, r * 10)
+    const a = Number(q.get('az') ?? 0.7)
+    cam.position.set(Math.sin(a) * r * 1.6, r * 0.5, Math.cos(a) * r * 1.6); cam.lookAt(0, 0, 0)
+    const x = (i % cols) * w, y = innerHeight - (Math.floor(i / cols) + 1) * h
+    renderer.setViewport(x, y, w, h); renderer.setScissor(x, y, w, h); renderer.render(scene, cam)
+  } catch (e) { info = names[i] + ' ERR ' + e.message }
+  const d = document.createElement('div'); d.textContent = info
+  Object.assign(d.style, { position: 'absolute', left: (i % cols) * w + 4 + 'px', top: Math.floor(i / cols) * h + 4 + 'px', color: '#111' })
+  document.body.appendChild(d)
+}
+window.ready = true
+</script></body></html>

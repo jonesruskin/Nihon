@@ -1,5 +1,6 @@
 // Quadtree terrain streamed from GSI elevation + GSI aerial photographs.
 // Each tile is a real photo of that patch of Japan draped on real terrain.
+import { buildingUniforms } from '../../render/materials/building'
 import {
   BufferAttribute,
   BufferGeometry,
@@ -200,8 +201,9 @@ export class TerrainManager {
   private camLat = 0
   private camLon = 0
   private camH = 0
-  /** Fires when a z>=15 tile becomes ready (physics/scatter can attach). */
-  onDetailTile: ((id: TileId, grid: GridData, anchor: LocalFrame) => void) | null = null
+  /** Fires when a max-zoom tile becomes ready (physics attaches its grid). */
+  onDetailTile: ((key: string, group: Group, grid: GridData) => void) | null = null
+  onTileDisposed: ((key: string) => void) | null = null
 
   constructor(
     private world: WorldFrame,
@@ -222,6 +224,11 @@ export class TerrainManager {
   }
 
   /** Height (m) at a geodetic point from the finest loaded DEM. */
+  /** Open sea (deeper than wading depth) at a point? */
+  isSea(lat: number, lon: number): boolean {
+    return this.dem.seaAt(lat, lon) > 0.35
+  }
+
   heightAt(lat: number, lon: number): number {
     return this.dem.heightAt(lat, lon)
   }
@@ -309,6 +316,7 @@ export class TerrainManager {
       const size = tileSizeMeters(id)
       const geom = buildGeometry(id, grid, frame, Math.max(4, size * 0.015))
       const mat = new MeshStandardMaterial({ roughness: 0.93, metalness: 0, color: photo ? 0xffffff : 0x3d5a40 })
+      patchGroundWeather(mat)
       if (photo) {
         const tex = new Texture(photo)
         tex.colorSpace = SRGBColorSpace
@@ -340,7 +348,7 @@ export class TerrainManager {
       t.dem = dem
       t.positions = grid.positions
       t.state = 'ready'
-      if (id.z >= 15 && this.onDetailTile) this.onDetailTile(id, grid, frame)
+      if (id.z >= 17 && this.onDetailTile) this.onDetailTile(tileKey(id), group, grid)
     } catch (e) {
       console.warn('terrain tile failed', tileKey(id), e)
       t.state = 'error'
@@ -366,7 +374,54 @@ export class TerrainManager {
           })
         }
         this.tiles.delete(k)
+        this.onTileDisposed?.(k)
       }
     }
+  }
+
+  /** Is the terrain under a point drawn at full detail yet? */
+  isDetailedAt(lat: number, lon: number): boolean {
+    for (const t of this.visible) {
+      if (t.id.z < 17) continue
+      const b = tileBounds(t.id)
+      if (lon >= b.west && lon <= b.east && lat >= b.south && lat <= b.north) return true
+    }
+    return false
+  }
+}
+
+export { GRID_INDICES }
+
+/** Snow settles on the land (flat ground first), rain darkens it. */
+function patchGroundWeather(mat: MeshStandardMaterial): void {
+  mat.customProgramCacheKey = () => 'nihon-ground-v2'
+  mat.onBeforeCompile = (s) => {
+    s.uniforms.uSnow = buildingUniforms.uSnow
+    s.uniforms.uWet = buildingUniforms.uWet
+    s.vertexShader = s.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vUpness;')
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvUpness = normalize(mat3(modelMatrix) * objectNormal).y;')
+    s.fragmentShader = s.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uSnow; uniform float uWet; varying float vUpness;')
+      .replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+        #ifdef USE_MAP
+        // Aerial photos are shot through kilometres of blue haze: lift the
+        // airlight back out and restore the colour the ground really has.
+        {
+          vec3 sc = pow(max(diffuseColor.rgb, 0.0), vec3(1.0 / 2.2));
+          const vec3 haze = vec3(0.09, 0.11, 0.14);
+          sc = clamp((sc - haze) / (1.0 - haze), 0.0, 1.0);
+          float sl = dot(sc, vec3(0.2126, 0.7152, 0.0722));
+          sc = clamp(mix(vec3(sl), sc, 1.25), 0.0, 1.0);
+          diffuseColor.rgb = pow(sc, vec3(2.2 * 0.92));
+        }
+        #endif
+        float lum = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+        diffuseColor.rgb *= mix(1.0, 0.72, uWet);
+        float flatness = smoothstep(0.75, 0.93, vUpness);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.88, 0.9) * (0.82 + 0.25 * lum), uSnow * flatness * 0.92);`,
+      )
   }
 }

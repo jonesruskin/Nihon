@@ -4,3 +4,4 @@ dist
 test-results
 screenshots
 *.log
+public/_raw

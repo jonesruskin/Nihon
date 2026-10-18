@@ -3,10 +3,13 @@
 //   perspective (Bruneton precomputed scattering) -> bloom -> AgX -> SMAA.
 import {
   CubeCamera,
+  DirectionalLight,
+  HemisphereLight,
   Data3DTexture,
   HalfFloatType,
   LinearFilter,
   LinearMipMapLinearFilter,
+  Matrix4,
   Mesh,
   NoColorSpace,
   PCFShadowMap,
@@ -18,6 +21,7 @@ import {
   Scene,
   SRGBColorSpace,
   TextureLoader,
+  Uniform,
   Vector3,
   WebGLCubeRenderTarget,
   WebGLRenderer,
@@ -26,6 +30,8 @@ import {
 } from 'three'
 import {
   BloomEffect,
+  Effect,
+  EffectAttribute,
   EffectComposer,
   EffectPass,
   RenderPass,
@@ -46,8 +52,72 @@ import {
 import { CloudsEffect, CLOUD_SHAPE_DETAIL_TEXTURE_SIZE, CLOUD_SHAPE_TEXTURE_SIZE } from '@takram/three-clouds'
 import { DataTextureLoader, parseUint8Array, STBNLoader } from '@takram/three-geospatial'
 import type { WorldFrame } from '../core/frame'
+import { NightLights } from './NightLights'
 
 export type QualityTier = 'low' | 'medium' | 'high' | 'ultra'
+
+/** Replaces NaN/Inf (e.g. rare aerial-perspective pixels at night), clamps
+ *  fireflies so bloom can never smear them over the whole frame, and adds
+ *  the urban sky glow: the orange-grey dome of light pollution over a
+ *  Japanese city at night, brighter under cloud, absent in the countryside. */
+const _up = new Vector3()
+const _flat = new Vector3()
+
+class SanitizeEffect extends Effect {
+  constructor() {
+    super(
+      'Sanitize',
+      `uniform mat4 uInvViewProj;
+      uniform vec3 uCamPos;
+      uniform vec3 uGlow;
+      uniform float uFog;
+      uniform vec3 uFogColor;
+      uniform float uFar;
+      uniform float uExposure;
+      void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
+        vec3 c = inputColor.rgb;
+        bool bad = any(isnan(c)) || any(isinf(c));
+        c = bad ? vec3(0.0) : clamp(c, vec3(0.0), vec3(64.0));
+        // Fog / rain haze (postprocessing hands us perspective depth).
+        if (uFog > 0.0) {
+          // The sky only greys out when the haze layer itself is thick: in
+          // clear air the atmosphere's own scattering already does the job.
+          // Looking at the sky, the haze path grows toward the horizon, which
+          // is what pales a real summer sky to white at the skyline.
+          bool sky = depth >= 0.99999;
+          float dist = -getViewZ(depth);
+          if (sky) {
+            vec4 w = uInvViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+            float el = normalize(w.xyz / w.w - uCamPos).y;
+            dist = 3500.0 / max(0.07, el);
+          }
+          float f = 1.0 - exp(-dist * uFog);
+          c = mix(c, uFogColor, f);
+        }
+        if (depth >= 0.99999 && dot(uGlow, uGlow) > 0.0) {
+          vec4 w = uInvViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+          vec3 dir = normalize(w.xyz / w.w - uCamPos);
+          float el = max(dir.y, 0.0);
+          c += uGlow * (0.25 + 0.75 * exp(-el * 7.0));
+        }
+        // Eye adaptation (postprocessing's AgX ignores renderer exposure).
+        outputColor = vec4(c * uExposure, 1.0);
+      }`,
+      {
+        attributes: EffectAttribute.DEPTH,
+        uniforms: new Map<string, Uniform>([
+          ['uInvViewProj', new Uniform(new Matrix4())],
+          ['uCamPos', new Uniform(new Vector3())],
+          ['uGlow', new Uniform(new Vector3())],
+          ['uFog', new Uniform(0)],
+          ['uFogColor', new Uniform(new Vector3())],
+          ['uFar', new Uniform(400000)],
+          ['uExposure', new Uniform(1)],
+        ]),
+      },
+    )
+  }
+}
 
 const ASSET = (p: string) => `${import.meta.env.BASE_URL}takram/${p}`
 
@@ -71,6 +141,16 @@ export class RenderPipeline {
   private envAge = Infinity
   private lastSunDir = new Vector3()
   private bloom: BloomEffect
+  private sanitize = new SanitizeEffect()
+  readonly lights: NightLights
+  /** Fog extinction per metre (0 = clear air beyond the atmosphere model). */
+  fogDensity = 0
+  /** Lowest sun elevation (degrees) the clouds are lit with. */
+  cloudSunMin = 4
+  /** 0 outdoors .. 1 underground (tunnels, subway): no sun or sky light. */
+  indoor = 0
+  /** 0 day .. 1 night; set by the game each frame (drives lights + glow). */
+  night = 0
   private toneMapping: ToneMappingEffect
   /** 0 = clear, 1 = overcast. Dims direct sun and scales sky light. */
   overcast = 0
@@ -94,7 +174,7 @@ export class RenderPipeline {
     this.renderer.outputColorSpace = SRGBColorSpace
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = PCFShadowMap
-    this.renderer.toneMappingExposure = 3
+    this.renderer.toneMappingExposure = 1
 
     this.camera = new PerspectiveCamera(62, 1, 0.1, 400_000)
     this.scene.add(this.camera)
@@ -107,23 +187,22 @@ export class RenderPipeline {
     this.clouds.qualityPreset = 'medium'
     this.clouds.haze = false
     this.clouds.localWeatherVelocity.set(0.00004, 0)
-    this.clouds.events.addEventListener('change', (e) => {
-      if (e.property === 'atmosphereOverlay') this.aerial.overlay = this.clouds.atmosphereOverlay
-      if (e.property === 'atmosphereShadow') this.aerial.shadow = this.clouds.atmosphereShadow
-      if (e.property === 'atmosphereShadowLength') this.aerial.shadowLength = this.clouds.atmosphereShadowLength
-    })
+    this.clouds.events.addEventListener('change', () => this.linkCloudBuffers())
     this.aerial = new AerialPerspectiveEffect(this.camera, { sky: true, sun: true, moon: true })
-    this.aerial.overlay = this.clouds.atmosphereOverlay
-    this.aerial.shadow = this.clouds.atmosphereShadow
-    this.aerial.shadowLength = this.clouds.atmosphereShadowLength
+    this.linkCloudBuffers()
 
     this.bloom = new BloomEffect({ intensity: 0.6, luminanceThreshold: 0.92, luminanceSmoothing: 0.25, mipmapBlur: true })
     this.toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.AGX })
     const debug = new URLSearchParams(location.search)
     if (!debug.has('noclouds')) this.composer.addPass(new EffectPass(this.camera, this.clouds))
-    this.composer.addPass(new EffectPass(this.camera, this.aerial))
-    this.composer.addPass(new EffectPass(this.camera, this.bloom, this.toneMapping))
+    if (!debug.has('noaerial')) this.composer.addPass(new EffectPass(this.camera, this.aerial))
+    this.composer.addPass(new EffectPass(this.camera, this.sanitize))
+    this.composer.addPass(debug.has('nobloom') ? new EffectPass(this.camera, this.toneMapping) : new EffectPass(this.camera, this.bloom, this.toneMapping))
     this.composer.addPass(new EffectPass(this.camera, new SMAAEffect({ preset: SMAAPreset.HIGH })))
+
+    this.scene.add(this.moon, this.moon.target, this.bounce)
+    this.lights = new NightLights(this.scene)
+    this.lights.setPoolSize(16)
 
     this.sun = new SunDirectionalLight({ distance: 600 })
     this.sun.castShadow = true
@@ -206,14 +285,43 @@ export class RenderPipeline {
 
   setQuality(q: QualityTier): void {
     this.quality = q
-    const ratio = { low: 0.75, medium: 1, high: Math.min(window.devicePixelRatio, 1.5), ultra: Math.min(window.devicePixelRatio, 2) }[q]
+    const dpr = window.devicePixelRatio || 1
+    const ratio = { low: 0.6, medium: 1, high: Math.min(dpr, 1.5), ultra: Math.min(dpr, 2) }[q]
     this.renderer.setPixelRatio(ratio)
     this.clouds.qualityPreset = q === 'ultra' ? 'high' : q === 'high' ? 'medium' : 'low'
-    this.clouds.skipRendering = false
-    this.sun.shadow.mapSize.setScalar(q === 'low' ? 1024 : q === 'ultra' ? 4096 : 2048)
+    this.updateCloudSkip()
+    this.renderer.shadowMap.enabled = q !== 'low'
+    this.lights.setPoolSize({ low: 8, medium: 16, high: 24, ultra: 32 }[q])
+    this.sun.shadow.mapSize.setScalar(q === 'ultra' ? 4096 : 2048)
     this.sun.shadow.map?.dispose()
     this.sun.shadow.map = null
     this.resize()
+  }
+
+  /** Feed the cloud overlay / shadow buffers into the aerial perspective only
+   *  while clouds really render: skipped clouds leave those render targets
+   *  uninitialised (NaN in half-float), which blacks out the whole frame. */
+  private linkCloudBuffers(): void {
+    const on = !this.clouds.skipRendering && !this.noClouds
+    this.aerial.overlay = on ? this.clouds.atmosphereOverlay : null
+    this.aerial.shadow = on ? this.clouds.atmosphereShadow : null
+    this.aerial.shadowLength = on ? this.clouds.atmosphereShadowLength : null
+  }
+
+  private noClouds = new URLSearchParams(location.search).has('noclouds')
+
+  /** Clouds are skipped on the low tier, and after dark: the cloud march
+   *  produces NaNs once the sun is below the horizon. */
+  private updateCloudSkip(): void {
+    const el = this.sunElevation()
+    // Above the main cloud layers with the sun on the horizon (dawn on Fuji)
+    // the cloud pass returns NaN for the whole frame; you are above them anyway.
+    const above = this.camera.position.y > 2500 && el < 4
+    const skip = this.quality === 'low' || (this.textures !== null && (el < -2 || above))
+    if (this.clouds.skipRendering !== skip) {
+      this.clouds.skipRendering = skip
+      this.linkCloudBuffers()
+    }
   }
 
   resize(): void {
@@ -242,7 +350,19 @@ export class RenderPipeline {
     for (const t of [this.aerial, this.clouds, this.skyMaterial, this.sun]) t.worldToECEFMatrix.copy(w2e)
     this.aerial.sunDirection.copy(this.sunDirection)
     this.aerial.moonDirection.copy(this.moonDirection)
-    this.clouds.sunDirection.copy(this.sunDirection)
+    // The cloud renderer's sun-shadow projection degenerates as the sun nears
+    // the horizon (NaN everywhere: a black frame at every dawn and dusk), so
+    // the clouds are lit by a sun held at least ~4° up.
+    {
+      const up = _up.setFromMatrixColumn(w2e, 1)
+      const e = up.dot(this.sunDirection)
+      const minE = Math.sin((this.cloudSunMin * Math.PI) / 180)
+      const flat = _flat.copy(this.sunDirection).addScaledVector(up, -e)
+      if (e < minE && flat.lengthSq() > 1e-8) {
+        flat.normalize().multiplyScalar(Math.sqrt(1 - minE * minE)).addScaledVector(up, minE)
+        this.clouds.sunDirection.copy(flat)
+      } else this.clouds.sunDirection.copy(this.sunDirection)
+    }
     this.skyMaterial.sunDirection.copy(this.sunDirection)
     this.skyMaterial.moonDirection.copy(this.moonDirection)
     this.sun.sunDirection.copy(this.sunDirection)
@@ -256,7 +376,7 @@ export class RenderPipeline {
       Math.round(focus.z / step) * step,
     )
     this.sun.update()
-    const dim = 1 - this.overcast * 0.85
+    const dim = (1 - this.overcast * 0.85) * (1 - this.indoor)
     this.sun.intensity = dim
     this.sun.castShadow = this.overcast < 0.85 && this.sunElevation() > -2
 
@@ -270,10 +390,60 @@ export class RenderPipeline {
       this.envTarget = this.pmrem.fromCubemap(this.cubeTarget.texture)
       this.scene.environment = this.envTarget.texture
     }
-    this.scene.environmentIntensity = 1 - this.overcast * 0.35
+    this.scene.environmentIntensity = (1 - this.overcast * 0.35) * (1 - 0.92 * this.indoor)
+    // Eye adaptation: the visual system opens up at dusk and night.
+    const el = this.sunElevation()
+    // Relative to daylight: the eye opens up ~2x through dusk into night.
+    const outdoor = el > 8 ? 1 : el > -6 ? 1 + ((8 - el) / 14) * 0.7 : 1.7 + Math.min(0.5, (-6 - el) / 12)
+    const target = outdoor + (Math.max(outdoor, 1.6) - outdoor) * this.indoor
+    this.exposure += (target * (1 + this.overcast * 0.25) - this.exposure) * Math.min(1, dt * 0.8)
+    this.sanitize.uniforms.get('uExposure')!.value = this.exposure
+    // Bloom sees exposed radiance: only what would clip blooms.
+    this.bloom.luminanceMaterial.threshold = 0.9
+    this.bloom.intensity = 0.55 - 0.25 * this.night
+    this.renderer.toneMappingExposure = this.exposure
+    // Shade in a sunny street gets ~20% of direct light from sky and bounce.
+    const sunUp = Math.max(0, Math.min(1, (el + 1) / 14))
+    this.bounce.intensity = 0.45 * sunUp * (1 - this.overcast * 0.35) * (1 - this.indoor * 0.9)
+    // Moonlight: a dim, cool key light so the countryside at night reads as
+    // dark rather than void (heavily exaggerated vs. the real 0.25 lux).
+    const up = new Vector3().setFromMatrixColumn(this.world.worldToECEF, 1)
+    const moonEl = up.dot(this.moonDirection)
+    this.moon.intensity = this.night * Math.max(0, Math.min(1, moonEl * 3)) * 0.05 * (1 - this.overcast * 0.8) * (1 - this.indoor)
+    this.moon.position.copy(this.moonDirection).transformDirection(this.world.ecefToWorld).multiplyScalar(500).add(focus)
+    this.moon.target.position.copy(focus)
+    this.moon.target.updateMatrixWorld()
+
+    this.updateCloudSkip()
+    this.lights.update(dt, this.camera.position, this.night)
+    // Sky glow in scene radiance (exposure is applied later): sodium/LED mix,
+    // ~3x brighter when low cloud reflects the city back down.
+    const g = this.night * (0.15 + 0.85 * this.lights.urban) * 0.0035 * (1 + this.overcast * 2.5)
+    const su = this.sanitize.uniforms
+    ;(su.get('uGlow')!.value as Vector3).set(g * 1.0, g * 0.78, g * 0.6)
+    ;(su.get('uCamPos')!.value as Vector3).copy(this.camera.position)
+    ;(su.get('uInvViewProj')!.value as Matrix4).multiplyMatrices(this.camera.matrixWorld, this.camera.projectionMatrixInverse)
+    su.get('uFog')!.value = this.fogDensity * (1 - this.indoor)
+    su.get('uFar')!.value = this.camera.far
+    // Fog takes the colour of the diffuse daylight (or the city glow at night).
+    const day = Math.max(0, Math.min(1, (this.sunElevation() + 4) / 14))
+    const fl = 0.02 + 0.55 * day * (1 - this.overcast * 0.45)
+    ;(su.get('uFogColor')!.value as Vector3).set(fl * 0.92 + g * 1.5, fl * 0.95 + g * 1.2, fl + g)
   }
 
+  private exposure = 1
+  private moon = new DirectionalLight(0x9fb2d6, 0)
+  /** Daylight bounce: sky above, sunlit ground and walls below. */
+  private bounce = new HemisphereLight(0xb9cbe6, 0x8a7d6c, 0)
+
+  private debugNoPost = new URLSearchParams(location.search).has('nopost')
+
   render(dt: number): void {
+    if (this.debugNoPost) {
+      this.renderer.toneMapping = 7 // AgX
+      this.renderer.render(this.scene, this.camera)
+      return
+    }
     this.composer.render(dt)
   }
 }

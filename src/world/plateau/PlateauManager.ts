@@ -1,6 +1,8 @@
 // PLATEAU (国土交通省) photo-textured 3D city models, streamed per city as
 // 3D Tiles. Heights are ellipsoidal; we shift each city down by its local
 // geoid height so buildings sit exactly on GSI (orthometric) terrain.
+import { ecefToGeodetic } from '../../core/geo'
+import { HERITAGE } from '../../data/heritage'
 import {
   BufferAttribute,
   Group,
@@ -50,12 +52,24 @@ function getDraco(): DRACOLoader {
 const LOAD_MARGIN_DEG = 0.012 // ~1.2 km
 const UNLOAD_MARGIN_DEG = 0.05
 
+function inHeritage(lat: number, lon: number): boolean {
+  for (const z of HERITAGE) {
+    const d = Math.hypot((z.lat - lat) * 111000, (z.lon - lon) * 111000 * Math.cos((lat * Math.PI) / 180))
+    if (d < z.radius) return true
+  }
+  return false
+}
+
 export class PlateauManager {
   readonly root = new Group()
   cities: PlateauCity[] = []
   private active = new Map<string, ActiveCity>()
   errorTarget = 24
   readonly facade: MeshStandardMaterial = createBuildingMaterial()
+  /** Mesh lifecycle hooks (physics colliders). */
+  onModel: ((key: string, mesh: Mesh) => void) | null = null
+  onModelDisposed: ((key: string) => void) | null = null
+  private modelSeq = 0
   /** Called when coverage changes so procedural buildings can be hidden. */
   onCoverageChange: (() => void) | null = null
 
@@ -90,6 +104,13 @@ export class PlateauManager {
   /** Whether any city with 3D models is near (even if not yet loaded). */
   hasCityNear(lat: number, lon: number): boolean {
     return this.citiesAt(lat, lon, 0.005).length > 0
+  }
+
+  /** Coverage boxes of all loaded cities intersecting a lat/lon box. */
+  coverageIn(w: number, s: number, e: number, n: number): Array<[number, number, number, number]> {
+    const out: Array<[number, number, number, number]> = []
+    for (const a of this.active.values()) for (const r of a.coverage) if (r[0] < e && r[2] > w && r[1] < n && r[3] > s) out.push(r)
+    return out
   }
 
   get activeNames(): string[] {
@@ -142,7 +163,18 @@ export class PlateauManager {
       walk((tileset as unknown as { root: RawTile }).root)
       this.onCoverageChange?.()
     })
-    tiles.addEventListener('load-model', ({ scene }: { scene: Object3D }) => this.prepareModel(scene))
+    tiles.addEventListener('load-model', ({ scene }: { scene: Object3D }) => {
+      this.prepareModel(scene)
+      const key = `${city.code}:${this.modelSeq++}`
+      scene.userData.nihonKey = key
+      let i = 0
+      scene.traverse((o) => {
+        if ((o as Mesh).isMesh) this.onModel?.(`${key}:${i++}`, o as Mesh)
+      })
+    })
+    tiles.addEventListener('dispose-model', ({ scene }: { scene: Object3D }) => {
+      if (scene.userData.nihonKey) this.onModelDisposed?.(scene.userData.nihonKey + ':')
+    })
 
     // Shift down along the local vertical by the geoid height.
     const clat = (city.bbox[1] + city.bbox[3]) / 2
@@ -171,6 +203,13 @@ export class PlateauManager {
    */
   private prepareModel(scene: Object3D): void {
     scene.updateMatrixWorld(true)
+    // Official per-building attributes (用途, 階数, 構造) from the batch table.
+    type BT = { getPropertyArray(k: string): unknown[] | null; getKeys(): string[] }
+    const bt = (scene as unknown as { batchTable?: BT }).batchTable
+    const usage = (bt?.getPropertyArray('bldg:usage') ?? []) as Array<string | null>
+    const storeys = (bt?.getPropertyArray('bldg:storeysAboveGround') ?? []) as Array<number | null>
+    const fire = (bt?.getPropertyArray('uro:BuildingDetailAttribute_uro:fireproofStructureType') ?? []) as Array<string | null>
+    const attrs = (bt?.getKeys().includes('attributes') ? bt.getPropertyArray('attributes') : []) as Array<Record<string, unknown> | null>
     const v = new Vector3()
     const centre = new Vector3()
     scene.traverse((o) => {
@@ -207,6 +246,7 @@ export class PlateauManager {
       }
       const seedOf = new Map<number, number>()
       const kindOf = new Map<number, number>()
+      const fhOf = new Map<number, number>()
       for (const [id, a] of sum) {
         const x = Math.round(a[0] / a[3])
         const y = Math.round(a[1] / a[3])
@@ -215,23 +255,55 @@ export class PlateauManager {
         const seed = r - Math.floor(r)
         seedOf.set(id, seed)
         const height = (maxH.get(id) ?? 0) - (minH.get(id) ?? 0)
+        const u = usage[id] ?? ''
+        const detailed = String(((attrs[id]?.['uro:BuildingDetailAttribute'] as Array<Record<string, unknown>> | undefined)?.[0]?.['uro:detailedUsage']) ?? '')
+        const st = storeys[id] ?? 0
         let kind: number = BUILDING_KIND.generic
-        if (height > 70 && seed > 0.25) kind = BUILDING_KIND.glass
+        if (detailed.includes('宗教')) kind = BUILDING_KIND.wood
+        else if (u === '住宅' || u === '戸建住宅' || (u.includes('併用住宅') && !u.includes('共同'))) kind = height < 13 ? BUILDING_KIND.house : BUILDING_KIND.apartment
+        else if (u.includes('共同住宅')) kind = BUILDING_KIND.apartment
+        else if (u.includes('商業') || u.includes('宿泊')) kind = height > 70 && seed > 0.3 ? BUILDING_KIND.glass : BUILDING_KIND.commercial
+        else if (u.includes('業務') || u.includes('官公庁')) kind = height > 50 && seed > 0.25 ? BUILDING_KIND.glass : BUILDING_KIND.office
+        else if (u.includes('工場') || u.includes('倉庫') || u.includes('運輸')) kind = BUILDING_KIND.industrial
+        else if (height > 70 && seed > 0.25) kind = BUILDING_KIND.glass
         else if (height > 12) kind = BUILDING_KIND.office
         else if (height < 9) kind = BUILDING_KIND.house
+        if (kind === BUILDING_KIND.house && (fire[id] ?? '') === '耐火' && height > 9) kind = BUILDING_KIND.apartment
+        const name = String(attrs[id]?.['gml:name'] ?? attrs[id]?.['name'] ?? '')
+        if (/神社|大社|神宮|稲荷|八幡|天満宮/.test(name) || (kind === BUILDING_KIND.wood && /殿|社/.test(name)))
+          kind = /稲荷|八幡|天満宮|厳島|春日|平安|八坂|日枝|住吉|伏見/.test(name) || (!/神宮|出雲/.test(name) && seed < 0.4) ? BUILDING_KIND.shrine : BUILDING_KIND.shrinePlain
+        // In historic districts small, low buildings are left to the OSM
+        // builder, which gives them vernacular facades and pitched roofs.
+        if (kind !== BUILDING_KIND.wood && kind !== BUILDING_KIND.shrine && kind !== BUILDING_KIND.shrinePlain && height <= 12) {
+          const g2 = ecefToGeodetic(a[0] / a[3], a[1] / a[3], a[2] / a[3])
+          if (inHeritage(g2.lat, g2.lon)) kind = -1
+        }
         kindOf.set(id, kind)
+        fhOf.set(id, st > 0 && st < 200 ? Math.min(5.5, Math.max(2.6, height / st)) : 0)
       }
       const bh = new Float32Array(count)
       const seed = new Float32Array(count)
       const kind = new Float32Array(count)
+      const fh = new Float32Array(count)
       for (let i = 0; i < count; i++) {
         bh[i] = heights[i] - (minH.get(ids[i]) ?? 0)
         seed[i] = seedOf.get(ids[i]) ?? 0
         kind[i] = kindOf.get(ids[i]) ?? 0
+        fh[i] = fhOf.get(ids[i]) ?? 0
       }
+      // Collapse hidden buildings to a point (no draw, no shadow).
+      const anchor = new Map<number, number>()
+      for (let i = 0; i < count; i++) {
+        if (kind[i] > -0.5) continue
+        const first = anchor.get(ids[i])
+        if (first === undefined) anchor.set(ids[i], i)
+        else pos.setXYZ(i, pos.getX(first), pos.getY(first), pos.getZ(first))
+      }
+      if (anchor.size) pos.needsUpdate = true
       g.setAttribute('bh', new BufferAttribute(bh, 1))
       g.setAttribute('seed', new BufferAttribute(seed, 1))
       g.setAttribute('kind', new BufferAttribute(kind, 1))
+      g.setAttribute('fh', new BufferAttribute(fh, 1))
       if (!g.getAttribute('normal')) g.computeVertexNormals()
       const old = Array.isArray(m.material) ? m.material : [m.material]
       old.forEach((x) => x.dispose())

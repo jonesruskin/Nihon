@@ -51,7 +51,7 @@ attribute float fh;
 export function createBuildingMaterial(): MeshStandardMaterial {
   const m = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0 })
   m.name = 'facade'
-  m.customProgramCacheKey = () => 'nihon-facade-v1'
+  m.customProgramCacheKey = () => 'nihon-facade-v2'
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, buildingUniforms)
     shader.vertexShader = shader.vertexShader
@@ -167,6 +167,10 @@ FacadeSample facade() {
   float bx = floor(u / bay);
   float fx = fract(u / bay);
 
+  // How many pixels a window bay spans: far away the per-window detail is
+  // sub-pixel and must fade to its average, or it shimmers into noise.
+  float fw = max(fwidth(u / bay), fwidth(v / floorH));
+
   vec3 wall = palette(bhash1(s * 11.7), kind);
   // Low-frequency weathering: rain streaks under windows, dirt near street.
   float streak = bhash(vec2(floor(u * 1.5), floor(v * 0.2))) * 0.05;
@@ -228,11 +232,15 @@ FacadeSample facade() {
     float edge = aastep(0.0, fx) * (1.0 - aastep(0.18, fx)) * step(0.5, bhash1(bx * 0.37 + s * 5.0));
     float hue = bhash(vec2(bx, fl) + s * 13.0);
     vec3 signC = hue < 0.25 ? vec3(0.85, 0.12, 0.10) : hue < 0.45 ? vec3(0.95, 0.75, 0.12) : hue < 0.6 ? vec3(0.12, 0.35, 0.8) : hue < 0.75 ? vec3(0.95, 0.95, 0.92) : hue < 0.88 ? vec3(0.1, 0.55, 0.3) : vec3(0.85, 0.3, 0.6);
+    // Distant streets of signs blend into one warm average.
+    signC = mix(signC, vec3(0.7, 0.45, 0.35), smoothstep(0.15, 0.45, fw));
     float sign = max(bandSign, edge * step(fy, 0.92));
-    // faux characters: blocky glyph texture inside signs
+    // faux characters: blocky glyph texture inside signs, faded out before
+    // the glyph cells get smaller than a couple of pixels
     vec2 gp = vec2(u * 2.2, v * 2.2);
+    float gfade = 1.0 - smoothstep(0.2, 0.6, max(fwidth(gp.x), fwidth(gp.y)));
     float glyph = step(0.55, bhash(floor(gp))) * step(0.15, fract(gp.x)) * step(0.15, fract(gp.y));
-    vec3 signFace = mix(signC, vec3(1.0) - signC * 0.7, glyph * 0.8);
+    vec3 signFace = mix(signC, vec3(1.0) - signC * 0.7, mix(0.33, glyph, gfade) * 0.8);
     albedo = mix(albedo, signFace, sign);
     rough = mix(rough, 0.4, sign);
     emis += signFace * sign * mix(0.06, 0.5, uNight);
@@ -328,9 +336,12 @@ FacadeSample facade() {
   }
 
   // Far away the pattern is sub-pixel: fade to its average to avoid moire.
-  float fw = max(fwidth(u / bay), fwidth(v / floorH));
-  float far = vernacular ? 0.0 : smoothstep(0.2, 0.55, fw);
-  o.albedo = mix(albedo, mix(wall, glass, winW * winH * (house ? 0.6 : 1.0)) * (wood ? 0.6 : 1.0), far * (apartment || commercial || wood ? 0.6 : 1.0));
+  float far = vernacular ? 0.0 : smoothstep(0.15, 0.45, fw);
+  vec3 avg = mix(wall, glass, winW * winH * (house ? 0.6 : 1.0));
+  if (apartment && v > 3.0) avg = mix(wall, vec3(0.6, 0.61, 0.6), 0.55); // slabs, rails, glass doors
+  if (commercial && v > 3.6) avg = mix(avg, vec3(0.7, 0.45, 0.35), 0.3); // signs
+  if (wood) avg = vec3(0.6, 0.55, 0.48);
+  o.albedo = mix(albedo, avg, far);
   o.roughness = rough;
   o.metalness = metal;
 
@@ -353,7 +364,10 @@ FacadeSample facade() {
     float shade = mix(1.0, 0.35, curtainX) * blinds * ceiling;
     if (r2 > 0.72 && r2 < 0.8) { col = vec3(0.45, 0.6, 1.0); intensity *= 0.5 + 0.3 * sin(uTime * 3.0 + h * 50.0); }
     intensity *= shade;
-    emis += col * lit * intensity * uNight;
+    // ...and at a distance, the average glow of a building's windows.
+    float winFrac = apartment && v > 3.0 ? 0.32 : (house ? 0.6 : 1.0) * winW * winH;
+    vec3 avgGlow = mix(warm, cool, 0.45) * occupancy * 0.04 * winFrac;
+    emis += mix(col * lit * intensity, avgGlow, far) * uNight;
     // Lantern-lit lattices and shoji in old towns.
     emis += vec3(1.0, 0.62, 0.3) * lattice * 0.05 * uNight * step(0.3, bhash1(s * 41.0));
   }

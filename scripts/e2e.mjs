@@ -36,6 +36,23 @@ const scenarios = [
     },
   },
   {
+    name: 'ferry-miyajima',
+    query: 'lat=34.31109&lon=132.30518&heading=150&t=2026-04-05T10:00:00%2B09:00&quality=low&weather=clear',
+    run: async (page) => {
+      const r = await page.evaluate(() => window.nihon.debugFerry(0))
+      assert(/宮島/.test(r), `unexpected departures ${r}`)
+      await page.waitForTimeout(6000)
+      let s = await stats(page)
+      assert(s.mode === 'ferry', `expected ferry, got ${s.mode}`)
+      await page.evaluate(() => window.nihon.debugFerryNear(0))
+      await page.waitForTimeout(5000)
+      await page.keyboard.press('KeyE')
+      await page.waitForTimeout(8000)
+      s = await stats(page)
+      assert(s.mode === 'onfoot', `expected to walk off the ferry, got ${s.mode}`)
+    },
+  },
+  {
     name: 'sapporo-snow',
     query: 'lat=43.0605&lon=141.35&heading=90&t=2026-01-20T11:00:00%2B09:00&quality=low&weather=snow',
     run: async (page) => {

@@ -19,6 +19,18 @@ export class AddressLookup {
     this.muni = await (await fetch(`${import.meta.env.BASE_URL}data/muni.json`)).json()
   }
 
+  /** One-off lookup of any point (e.g. the far port of a ferry route). */
+  async lookup(lat: number, lon: number): Promise<Address | null> {
+    if (!this.muni) return null
+    try {
+      const j = await (await fetch(`https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}`)).json()
+      const m = this.muni[String(parseInt(j?.results?.muniCd ?? '', 10))]
+      return m ? { prefCode: m[0], pref: m[1], city: m[2], area: String(j.results.lv01Nm ?? '').replace('－', '') } : null
+    } catch {
+      return null
+    }
+  }
+
   /** Non-blocking: returns the last known address and refreshes in the background. */
   query(lat: number, lon: number): Address | null {
     const key = `${lat.toFixed(3)},${lon.toFixed(3)}`

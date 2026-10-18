@@ -7,7 +7,7 @@ import type { Poi } from '../world/vector/build'
 import type { Journal } from './Journal'
 import { OMIYAGE } from '../data/prefectures'
 
-export type SpotKind = 'vending' | 'konbini' | 'ramen' | 'food' | 'cafe' | 'izakaya' | 'shrine' | 'temple' | 'hotel' | 'onsen' | 'souvenir' | 'arcade' | 'karaoke'
+export type SpotKind = 'vending' | 'konbini' | 'ramen' | 'food' | 'cafe' | 'izakaya' | 'shrine' | 'temple' | 'hotel' | 'onsen' | 'souvenir' | 'arcade' | 'karaoke' | 'ferry'
 
 export interface Spot {
   kind: SpotKind
@@ -28,6 +28,8 @@ export interface ActivityHost {
   passTime: (minutes: number) => void
   sleepUntilMorning: () => void
   sound: (name: 'ic' | 'can' | 'bell' | 'clap' | 'coin' | 'chime') => void
+  /** Boats leaving from this terminal (traced from the map; may take a moment). */
+  ferryDepartures: (s: Spot) => Promise<Array<{ label: string; sub: string; price: number; board: () => void }>>
   /** The prefecture you are in, for its local specialities (名物). */
   prefecture: () => { code: number; ja: string; en: string } | null
 }
@@ -44,6 +46,7 @@ function classify(p: Poi): SpotKind | null {
     return p.cls === 'place_of_worship' ? 'temple' : null
   }
   if (/温泉|の湯|湯屋|銭湯|スパ/.test(n) || p.sub === 'public_bath') return 'onsen'
+  if (p.cls === 'ferry_terminal' || p.sub === 'ferry_terminal' || /フェリー(乗り場|のりば|ターミナル)|旅客ターミナル|渡船|連絡船|汽船|高速船乗り場/.test(n)) return 'ferry'
   if (p.sub === 'gift' || /土産|みやげ|物産|特産|銘菓|名産/.test(n)) return 'souvenir'
   if (p.sub === 'amusement_arcade' || /ゲームセンター|ゲーセン|タイトーステーション|GiGO|ギーゴ|セガ|ラウンドワン|namco|ナムコ|モーリーファンタジー/i.test(n)) return 'arcade'
   if (p.cls === 'karaoke' || p.sub === 'karaoke' || /カラオケ|ビッグエコー|まねきねこ|ジャンカラ|歌広場/.test(n)) return 'karaoke'
@@ -114,6 +117,7 @@ export function spotPrompt(s: Spot): string {
     souvenir: 'Browse the souvenirs',
     arcade: 'Go into the game centre',
     karaoke: 'Sing karaoke',
+    ferry: 'Buy a ferry ticket',
   }
   return `<kbd>E</kbd>${label[s.kind]} <span style="opacity:.75">${esc(s.name)}</span>`
 }
@@ -207,6 +211,8 @@ export class ActivityPanel {
         const p = this.host.prefecture()
         return `Shelves of beautifully wrapped boxes${p ? ` — the specialities of <b>${p.ja}</b> (${p.en})` : ''}. Individually wrapped sweets are made for sharing.`
       }
+      case 'ferry':
+        return 'A ticket window (乗船券売り場), benches, and a board of departures. Boats leave on the minute.'
       case 'arcade':
         return 'A wall of noise: UFO catchers by the door, rhythm games upstairs, purikura booths at the back.'
       case 'karaoke':
@@ -308,6 +314,22 @@ export class ActivityPanel {
           }
         })
       }
+      case 'ferry':
+        return [
+          {
+            label: '時刻表・乗船券',
+            sub: 'Departures and tickets',
+            run: () => {
+              void H.ferryDepartures(s).then((list) =>
+                this.render(
+                  list.map((d) => ({ label: d.label, sub: d.sub, price: d.price, run: () => d.board() })),
+                  list.length ? 'Choose a crossing. Keep the ticket — it is collected as you walk off.' : 'No scheduled boats leave from here.',
+                ),
+              )
+              return 'Checking the departure board…'
+            },
+          },
+        ]
       case 'arcade':
         j.discover('gamecenter')
         return [
@@ -429,7 +451,7 @@ function drawFortune(): { rank: string; en: string; bad: boolean; lines: string[
 }
 
 function kindName(k: SpotKind): string {
-  return { vending: 'Vending machine', konbini: 'Convenience store', ramen: 'Noodle shop', food: 'Restaurant', cafe: 'Café', izakaya: 'Izakaya', shrine: 'Shinto shrine', temple: 'Buddhist temple', hotel: 'Hotel', onsen: 'Hot spring', souvenir: 'Souvenir shop', arcade: 'Game centre', karaoke: 'Karaoke' }[k]
+  return { vending: 'Vending machine', konbini: 'Convenience store', ramen: 'Noodle shop', food: 'Restaurant', cafe: 'Café', izakaya: 'Izakaya', shrine: 'Shinto shrine', temple: 'Buddhist temple', hotel: 'Hotel', onsen: 'Hot spring', souvenir: 'Souvenir shop', arcade: 'Game centre', karaoke: 'Karaoke', ferry: 'Ferry terminal' }[k]
 }
 
 function esc(s: string): string {

@@ -39,6 +39,8 @@ import { ForestFill } from '../world/props/ForestFill'
 import { NearPeople } from '../people/NearPeople'
 import { AddressLookup } from '../core/address'
 import { busRule, distanceFare, type BusRule } from '../transit/busFare'
+import { FerryTracer, distM, ferryFare, ferrySpeed, type FerryRoute, type LL } from '../transit/ferry'
+import { createFerry, type FerryShip } from '../transit/ferryModel'
 import { PREFECTURES } from '../data/prefectures'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
@@ -55,7 +57,7 @@ export interface StartParams {
   character: string
 }
 
-export type Mode = 'loading' | 'onfoot' | 'driving' | 'passenger' | 'train' | 'fly'
+export type Mode = 'loading' | 'onfoot' | 'driving' | 'passenger' | 'train' | 'ferry' | 'fly'
 
 /** `t` accepts an ISO date or a bare JST wall-clock time ("19:30") today. */
 function parseTime(t: string): Date | undefined {
@@ -147,6 +149,8 @@ export class Game {
   private ride: { car: AICar; kind: 'taxi' | 'bus'; meterM: number; slowS: number; last: Vector3; fare: number; bus?: BusRule; ticket?: number } | null = null
   private hailed: AICar | null = null
   destination: { lat: number; lon: number; label: string } | null = null
+  private ferryTracer = new FerryTracer()
+  private ferry: { route: FerryRoute; dest: string; pts: LL[]; cum: number[]; total: number; s: number; v: number; vmax: number; ship: FerryShip; head: number; arrived: boolean; t: number } | null = null
   avatar: Person | null = null
   private avatarName = ''
   private dressing = false
@@ -257,6 +261,7 @@ export class Game {
         this.clock.set(new Date(next.getTime() + (j.hourFloat >= 7 ? 86400e3 : 0)))
       },
       sound: (n) => this.sound.play(n),
+      ferryDepartures: (spot) => this.ferryDepartures(spot.pos),
       prefecture: () => {
         const code = this.address.last?.prefCode
         return PREFECTURES.find((x) => x.code === code) ?? null
@@ -495,6 +500,7 @@ export class Game {
     this.player.heading = this.rig.yaw
     await this.dressAvatar()
     this.player.enabled = true
+    this.player.object.visible = true
     this.mode = 'onfoot'
     this.rig.snap()
     this.placeScrambles()
@@ -511,6 +517,164 @@ export class Game {
    * Don't start the player nose-to-wall: if the requested heading is blocked
    * within a few metres, turn to the most open direction nearest to it.
    */
+  /** Departures from the ferry terminal at a world position, for the ticket window. */
+  private async ferryDepartures(at: Vector3): Promise<Array<{ label: string; sub: string; price: number; board: () => void }>> {
+    const g = this.world.geodeticFromWorld(at)
+    const routes = await this.ferryTracer.departures(g.lat, g.lon)
+    return Promise.all(
+      routes.map(async (r) => {
+        const end = r.pts[r.pts.length - 1]
+        // The pier may sit just offshore: look a little way inland too.
+        let a = await this.address.lookup(end[0], end[1])
+        for (let k = 0; !a && k < 16; k++) {
+          const ang = (k % 8) * (Math.PI / 4)
+          const m = k < 8 ? 250 : 700
+          a = await this.address.lookup(end[0] + (Math.cos(ang) * m) / 111132, end[1] + (Math.sin(ang) * m) / (111412 * Math.cos((end[0] * Math.PI) / 180)))
+        }
+        const dest = a ? `${a.city}${a.area ? ' ' + a.area : ''}` : `${end[0].toFixed(2)}°N ${end[1].toFixed(2)}°E`
+        const min = Math.round((r.km * 1000) / ferrySpeed(r.km) / 60 + 4)
+        const dur = min < 90 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')}`
+        return {
+          label: `${dest} 行き`,
+          sub: `${r.name || 'フェリー'}${r.nameEn && r.nameEn !== r.name ? ` · ${r.nameEn}` : ''} · ${r.km < 10 ? r.km.toFixed(1) : Math.round(r.km)} km · ${dur}`,
+          price: ferryFare(r.km),
+          board: () => this.boardFerry(r, dest),
+        }
+      }),
+    )
+  }
+
+  private boardFerry(route: FerryRoute, dest: string): void {
+    // Smooth the traced line (Chaikin) so the ship turns rather than pivots.
+    let pts = route.pts
+    for (let k = 0; k < 2; k++) {
+      const out: LL[] = [pts[0]]
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i]
+        const b = pts[i + 1]
+        out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25], [a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75])
+      }
+      out.push(pts[pts.length - 1])
+      pts = out
+    }
+    const cum = [0]
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + distM(pts[i - 1], pts[i]))
+    const ship = createFerry(route.km, route.pts[0][1])
+    this.pipeline.scene.add(ship.group)
+    if (this.avatar) {
+      this.player.object.remove(this.avatar.object)
+      ship.group.add(this.avatar.object)
+      this.avatar.object.position.set(ship.deck.x, ship.deck.y, ship.deck.z)
+      this.avatar.object.rotation.set(0, Math.PI / 2, 0) // looking out over the rail
+      this.avatar.object.visible = true
+    }
+    this.player.enabled = false
+    this.player.object.visible = false
+    this.player.body.setEnabled(false)
+    this.ferry = { route, dest, pts, cum, total: cum[cum.length - 1], s: 0, v: 0, vmax: ferrySpeed(route.km), ship, head: 0, arrived: false, t: 0 }
+    this.mode = 'ferry'
+    this.rig.mode = 'third'
+    this.journal.discover('ferry')
+    this.sound.play('chime')
+    this.hud.toast(`乗船 — <b>${route.name || 'The ferry'}</b> for ${dest}. Shoes stay on; on long crossings, passengers stretch out on the carpeted 2等 floor.`, 7000)
+    this.updateHints()
+  }
+
+  private ferryAt(f: NonNullable<Game['ferry']>, s: number): LL {
+    const c = f.cum
+    let lo = 0
+    let hi = c.length - 1
+    s = Math.max(0, Math.min(f.total, s))
+    while (hi - lo > 1) {
+      const m = (lo + hi) >> 1
+      if (c[m] <= s) lo = m
+      else hi = m
+    }
+    const t = c[hi] > c[lo] ? (s - c[lo]) / (c[hi] - c[lo]) : 0
+    const a = f.pts[lo]
+    const b = f.pts[hi]
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+  }
+
+  private updateFerry(dt: number, input: import('../player/Input').Input): void {
+    const f = this.ferry!
+    f.t += dt
+    const remain = f.total - f.s
+    // Ease out of the berth, cruise, and slow right down into the far port.
+    const acc = 0.22
+    const vWant = f.arrived ? 0 : Math.min(f.vmax, Math.sqrt(2 * acc * Math.max(0, remain - 12)) + 0.3)
+    f.v += Math.max(-acc * 2 * dt, Math.min(acc * dt, vWant - f.v))
+    f.s = Math.min(f.total, f.s + f.v * dt)
+    if (remain < 15 && f.v < 0.4) f.arrived = true
+    const here = this.ferryAt(f, f.s)
+    const ahead = this.ferryAt(f, f.s + 40)
+    const behind = this.ferryAt(f, f.s - 40)
+    const p = this.world.worldFromGeodetic(here[0], here[1], 0)
+    const pa = this.world.worldFromGeodetic(ahead[0], ahead[1], 0)
+    const pb = this.world.worldFromGeodetic(behind[0], behind[1], 0)
+    const want = Math.atan2(pa.x - pb.x, pa.z - pb.z)
+    if (f.t < 0.1) f.head = want
+    let d = want - f.head
+    while (d > Math.PI) d -= Math.PI * 2
+    while (d < -Math.PI) d += Math.PI * 2
+    f.head += d * Math.min(1, dt * 0.8)
+    // Swell: slow pitch and roll, more on small boats.
+    const sw = f.ship.length < 50 ? 1 : f.ship.length < 100 ? 0.6 : 0.3
+    const g = f.ship.group
+    g.position.set(p.x, p.y + Math.sin(f.t * 0.9) * 0.12 * sw, p.z)
+    g.rotation.order = 'YXZ'
+    g.rotation.set(Math.sin(f.t * 0.7) * 0.012 * sw, f.head, Math.sin(f.t * 0.53 + 1) * 0.02 * sw)
+    g.updateMatrixWorld(true)
+    if (this.avatar) this.avatar.update(dt, 0)
+    const deck = new Vector3(f.ship.deck.x, f.ship.deck.y + 1.55, f.ship.deck.z).applyMatrix4(g.matrixWorld)
+    this.rig.update(dt, { pivot: deck, speed: f.v, stepHz: 0, distance: f.ship.length < 50 ? 7 : 11, shoulder: 0 })
+    this.hud.setSpeed(null)
+    const km = remain / 1000
+    const left = km >= 1 ? `${km.toFixed(km < 10 ? 1 : 0)} km` : `${Math.round(remain)} m`
+    const mins = Math.max(1, Math.round(remain / Math.max(f.v, f.vmax * 0.5) / 60))
+    this.hud.setPrompt(
+      f.arrived
+        ? `<kbd>E</kbd>Disembark at <b>${f.dest}</b> <span style="opacity:.7">— hand in your ticket at the gangway</span>`
+        : `⛴ <b>${f.route.name || 'Ferry'}</b> → ${f.dest} · ${left} · about ${mins} min${f.total > 1500 ? ' · <kbd>T</kbd>skip ahead' : ''}`,
+    )
+    if (input.hit('KeyE') && f.arrived) {
+      void this.leaveFerry()
+      return
+    }
+    if (input.hit('KeyT') && !f.arrived && f.total > 1500) {
+      const end = f.pts[f.pts.length - 1]
+      const name = f.route.name || 'Ferry'
+      this.endFerry()
+      void this.travelTo(end[0], end[1], undefined, undefined, `⛴ ${name} · arriving at ${f.dest}`)
+      return
+    }
+    this.maybeRebase(p)
+  }
+
+  /** Remove the ship and put the avatar back on the player. */
+  private endFerry(): void {
+    const f = this.ferry
+    if (!f) return
+    if (this.avatar) {
+      f.ship.group.remove(this.avatar.object)
+      this.player.object.add(this.avatar.object)
+      this.avatar.object.position.set(0, 0, 0)
+      this.avatar.object.rotation.set(0, 0, 0)
+    }
+    this.pipeline.scene.remove(f.ship.group)
+    f.ship.group.traverse((o) => (o as Mesh).geometry?.dispose())
+    this.ferry = null
+    this.hud.setPrompt(null)
+  }
+
+  private async leaveFerry(): Promise<void> {
+    const end = this.ferry!.pts[this.ferry!.pts.length - 1]
+    this.endFerry()
+    this.player.object.visible = true
+    await this.spawnPlayer(end[0], end[1])
+    this.updateHints()
+  }
+
   /** Fill the woods around the player at real forest density. */
   private updateForest(at: Vector3): void {
     const probe = new Vector3()
@@ -587,6 +751,8 @@ export class Game {
     this.hud.setHints(
       this.mode === 'fly'
         ? '<kbd>WASD</kbd>fly <kbd>Q/E</kbd>down/up <kbd>Shift</kbd>fast <kbd>G</kbd>land'
+        : this.mode === 'ferry'
+          ? `<kbd>T</kbd>skip ahead <kbd>V</kbd>${v} <kbd>E</kbd>disembark (in port)`
         : this.mode === 'train'
           ? '<kbd>T</kbd>skip to next station <kbd>Shift+T</kbd>skip to destination <kbd>V</kbd>seat / cab / outside <kbd>E</kbd>get off (when stopped)'
           : this.mode === 'passenger'
@@ -755,13 +921,15 @@ export class Game {
       this.updateTrain(dt, input)
     } else if (this.mode === 'passenger' && this.ride) {
       this.updateRide(dt, input)
+    } else if (this.mode === 'ferry' && this.ferry) {
+      this.updateFerry(dt, input)
     } else if (this.mode === 'fly') {
       this.updateFly(dt)
       this.maybeRebase(cam.position)
     }
 
-    if (this.mode === 'onfoot' || this.mode === 'driving' || this.mode === 'passenger' || this.mode === 'train') {
-      const focus = this.mode === 'train' ? cam.position : this.mode === 'driving' && this.vehicles.current ? this.vehicles.current.position : this.ride ? this.ride.car.pos : this.player.feet
+    if (this.mode === 'onfoot' || this.mode === 'driving' || this.mode === 'passenger' || this.mode === 'train' || this.mode === 'ferry') {
+      const focus = this.mode === 'train' || this.mode === 'ferry' ? cam.position : this.mode === 'driving' && this.vehicles.current ? this.vehicles.current.position : this.ride ? this.ride.car.pos : this.player.feet
       this.traffic.playerPos = this.mode === 'onfoot' ? this.player.feet : null
       this.traffic.playerCar = this.mode === 'driving' && this.vehicles.current ? { pos: this.vehicles.current.position, length: this.vehicles.current.spec.length } : null
       this.traffic.update(dt, focus, this.clock.jst.hourFloat)
@@ -1015,6 +1183,29 @@ export class Game {
   private lastTrainView = ''
 
   /** Debug/test: board the fastest route between two stations by name. */
+  /** Debug: board the i-th departure from the nearest ferry terminal. */
+  async debugFerry(i = 0): Promise<string> {
+    this.spots.update(this.vector.readyTiles)
+    const here = this.player.feet
+    const t = this.spots.spots.filter((s) => s.kind === 'ferry').sort((a, b) => a.pos.distanceTo(here) - b.pos.distanceTo(here))[0]
+    if (!t) return 'no terminal'
+    const deps = await this.ferryDepartures(t.pos)
+    if (!deps[i]) return 'no departures'
+    deps[i].board()
+    return `${t.name}: ${deps.map((d) => d.label + ' ' + d.sub + ' ¥' + d.price).join(' | ')}`
+  }
+
+  /** Debug: jump the ferry to s metres from the far pier. */
+  debugFerryNear(m = 120): void {
+    const f = this.ferry
+    if (!f) return
+    f.s = Math.max(0, f.total - m)
+    if (m <= 0) {
+      f.v = 0
+      f.arrived = true
+    }
+  }
+
   debugRide(from: string, to: string, view: 'seat' | 'cab' | 'outside' = 'seat'): string {
     const net = this.rail.net
     if (!net) return 'no network'

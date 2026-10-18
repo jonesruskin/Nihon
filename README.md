@@ -19,6 +19,10 @@ real population and station ridership driving the crowds, and the real weather r
   line-colour liveries, Tokyo Metro, the N700 / E5 / E7 Shinkansen, trams. Sit on the bench and watch
   the city go by, take the driver's-cab view, or skip ahead (<kbd>T</kbd>). Subways run in tunnels with
   station halls; trains run on the real track geometry, on viaducts and under catenary.
+- **Ferries** — walk into a ferry terminal (フェリーのりば), read the departures and buy a ticket: routes
+  are traced from OpenStreetMap across the sea to the far port (the ten-minute JR hop to Miyajima, the
+  Kerama islands from Naha, the 740 km overnight boat from Ōarai to Tomakomai). Stand on deck as the
+  coast slides by, or skip ahead (<kbd>T</kbd>) on long voyages.
 - **Taxis and buses** — hail a taxi (<kbd>H</kbd>), pick a destination on the map, watch the Tokyo meter.
   Buses follow the local rules: a flat fare paid at the front as you board in Tokyo, Yokohama,
   Kawasaki and Nagoya; flat fares paid on the way out in Kyoto and Osaka; and everywhere else the

@@ -60,6 +60,9 @@ export type QualityTier = 'low' | 'medium' | 'high' | 'ultra'
  *  fireflies so bloom can never smear them over the whole frame, and adds
  *  the urban sky glow: the orange-grey dome of light pollution over a
  *  Japanese city at night, brighter under cloud, absent in the countryside. */
+const _up = new Vector3()
+const _flat = new Vector3()
+
 class SanitizeEffect extends Effect {
   constructor() {
     super(
@@ -142,6 +145,8 @@ export class RenderPipeline {
   readonly lights: NightLights
   /** Fog extinction per metre (0 = clear air beyond the atmosphere model). */
   fogDensity = 0
+  /** Lowest sun elevation (degrees) the clouds are lit with. */
+  cloudSunMin = 4
   /** 0 outdoors .. 1 underground (tunnels, subway): no sun or sky light. */
   indoor = 0
   /** 0 day .. 1 night; set by the game each frame (drives lights + glow). */
@@ -308,7 +313,11 @@ export class RenderPipeline {
   /** Clouds are skipped on the low tier, and after dark: the cloud march
    *  produces NaNs once the sun is below the horizon. */
   private updateCloudSkip(): void {
-    const skip = this.quality === 'low' || (this.textures !== null && this.sunElevation() < -2)
+    const el = this.sunElevation()
+    // Above the main cloud layers with the sun on the horizon (dawn on Fuji)
+    // the cloud pass returns NaN for the whole frame; you are above them anyway.
+    const above = this.camera.position.y > 2500 && el < 4
+    const skip = this.quality === 'low' || (this.textures !== null && (el < -2 || above))
     if (this.clouds.skipRendering !== skip) {
       this.clouds.skipRendering = skip
       this.linkCloudBuffers()
@@ -341,7 +350,19 @@ export class RenderPipeline {
     for (const t of [this.aerial, this.clouds, this.skyMaterial, this.sun]) t.worldToECEFMatrix.copy(w2e)
     this.aerial.sunDirection.copy(this.sunDirection)
     this.aerial.moonDirection.copy(this.moonDirection)
-    this.clouds.sunDirection.copy(this.sunDirection)
+    // The cloud renderer's sun-shadow projection degenerates as the sun nears
+    // the horizon (NaN everywhere: a black frame at every dawn and dusk), so
+    // the clouds are lit by a sun held at least ~4° up.
+    {
+      const up = _up.setFromMatrixColumn(w2e, 1)
+      const e = up.dot(this.sunDirection)
+      const minE = Math.sin((this.cloudSunMin * Math.PI) / 180)
+      const flat = _flat.copy(this.sunDirection).addScaledVector(up, -e)
+      if (e < minE && flat.lengthSq() > 1e-8) {
+        flat.normalize().multiplyScalar(Math.sqrt(1 - minE * minE)).addScaledVector(up, minE)
+        this.clouds.sunDirection.copy(flat)
+      } else this.clouds.sunDirection.copy(this.sunDirection)
+    }
     this.skyMaterial.sunDirection.copy(this.sunDirection)
     this.skyMaterial.moonDirection.copy(this.moonDirection)
     this.sun.sunDirection.copy(this.sunDirection)

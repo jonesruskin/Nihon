@@ -159,11 +159,21 @@ function leafMaterial(kind: 'broad' | 'needle' | 'bamboo', tint: number, seasona
     metalness: 0,
   })
   m.name = `leaf-${seasonal}`
-  m.customProgramCacheKey = () => `leaf-${seasonal}-v3`
+  m.customProgramCacheKey = () => `leaf-${seasonal}-v4`
   m.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, seasonUniforms, { uSnowLeaf: buildingUniforms.uSnow })
+    Object.assign(shader.uniforms, seasonUniforms, { uSnowLeaf: buildingUniforms.uSnow, uNightLeaf: buildingUniforms.uNight })
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float uBloom; uniform float uAutumn; uniform float uBare; uniform float uSnowLeaf;')
+      .replace('#include <common>', '#include <common>\nuniform float uBloom; uniform float uAutumn; uniform float uBare; uniform float uSnowLeaf; uniform float uNightLeaf;')
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        ${
+          seasonal === 'sakura'
+            ? `// 夜桜: blossoms lit from below by lanterns and floodlights after dark.
+        totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.78, 0.84) * uBloom * uNightLeaf * 0.085;`
+            : ''
+        }`,
+      )
       .replace(
         '#include <map_fragment>',
         `#include <map_fragment>

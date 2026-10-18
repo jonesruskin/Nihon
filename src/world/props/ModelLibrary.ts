@@ -20,11 +20,22 @@ export class ModelLibrary {
   load(id: string): Promise<Object3D> {
     let p = this.cache.get(id)
     if (!p) {
-      p = this.loader.loadAsync(`${BASE}${id}.glb`).then((g) => {
-        prepare(g.scene)
-        this.ready.set(id, g.scene)
-        return g.scene
+      // A dropped request shouldn't leave a prop missing for the whole visit.
+      const attempt = async (n: number): Promise<Object3D> => {
+        try {
+          return (await this.loader.loadAsync(`${BASE}${id}.glb`)).scene
+        } catch (e) {
+          if (n >= 3) throw e
+          await new Promise((r) => setTimeout(r, 800 * n))
+          return attempt(n + 1)
+        }
+      }
+      p = attempt(1).then((scene) => {
+        prepare(scene)
+        this.ready.set(id, scene)
+        return scene
       })
+      p.catch(() => this.cache.delete(id))
       this.cache.set(id, p)
     }
     return p

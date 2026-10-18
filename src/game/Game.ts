@@ -128,6 +128,7 @@ export class Game {
   forest!: ForestFill
   readonly fireworks = new Fireworks()
   private festTimer = 0
+  private placeWaits = 0
   private festNow: Festival | null = null
   private festNoticed = new Set<string>()
   private forestTimer = 0
@@ -1646,13 +1647,18 @@ export class Game {
       }
     }
     if (!best || bestD > 1500 || best.name === this.currentPlace) return
+    // The exact ward comes from GSI's reverse geocoder; give it a moment
+    // rather than guessing from overlapping city boxes.
+    const fresh = addr && this.address.query(g.lat, g.lon) === addr && Math.abs(this.address.lastLat - g.lat) + Math.abs(this.address.lastLon - g.lon) < 0.01
+    if (!fresh && this.mode !== 'fly' && this.placeWaits++ < 4) return
+    this.placeWaits = 0
     this.currentPlace = best.name
     const city = this.plateau.citiesAt(g.lat, g.lon)[0]
     this.hud.showPlace({
       kanji: best.name,
       reading: best.reading,
       romaji: best.romaji || best.nameEn,
-      sub: addr ? `${addr.pref} ${addr.city}` : city ? `${city.pref} ${city.name}` : undefined,
+      sub: fresh && addr ? `${addr.pref} ${addr.city}` : city?.pref,
     })
   }
 

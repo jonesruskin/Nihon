@@ -14,6 +14,9 @@ export class AddressLookup {
   private cache = new Map<string, Address | null>()
   private inflight = false
   last: Address | null = null
+  /** Where `last` was looked up. */
+  lastLat = 0
+  lastLon = 0
 
   async load(): Promise<void> {
     this.muni = await (await fetch(`${import.meta.env.BASE_URL}data/muni.json`)).json()
@@ -34,7 +37,15 @@ export class AddressLookup {
   /** Non-blocking: returns the last known address and refreshes in the background. */
   query(lat: number, lon: number): Address | null {
     const key = `${lat.toFixed(3)},${lon.toFixed(3)}`
-    if (this.cache.has(key)) return (this.last = this.cache.get(key) ?? this.last)
+    if (this.cache.has(key)) {
+      const hit = this.cache.get(key)
+      if (hit) {
+        this.last = hit
+        this.lastLat = lat
+        this.lastLon = lon
+      }
+      return this.last
+    }
     if (!this.inflight && this.muni) {
       this.inflight = true
       fetch(`https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}`)
@@ -44,7 +55,11 @@ export class AddressLookup {
           const m = this.muni![code]
           const a: Address | null = m ? { prefCode: m[0], pref: m[1], city: m[2], area: String(j.results.lv01Nm ?? '').replace('－', '') } : null
           this.cache.set(key, a)
-          if (a) this.last = a
+          if (a) {
+            this.last = a
+            this.lastLat = lat
+            this.lastLon = lon
+          }
         })
         .catch(() => this.cache.set(key, null))
         .finally(() => (this.inflight = false))

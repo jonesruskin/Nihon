@@ -23,6 +23,8 @@ export class Hud {
   private debug: HTMLDivElement
   private speedo: HTMLDivElement
   private placeTimer = 0
+  private tips: Array<{ head: string; text: string }> = []
+  private tipTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div')
@@ -35,6 +37,7 @@ export class Hud {
         <div class="loading-sub">Japan, rebuilt from open data</div>
         <div class="loading-bar"><div></div></div>
         <div class="loading-status">Preparing…</div>
+        <div class="loading-tip"></div>
         <div class="loading-credit">地理院タイル · PLATEAU · © OpenStreetMap contributors</div>
       </div>
       <div class="place"></div>
@@ -73,11 +76,35 @@ export class Hud {
 
   hideLoading(): void {
     this.loading.classList.add('done')
+    if (this.tipTimer) clearInterval(this.tipTimer)
+    this.tipTimer = null
   }
 
   showLoading(status: string): void {
     this.loading.classList.remove('done')
     this.setLoading(0, status)
+    this.startTips()
+  }
+
+  /** Things worth knowing (豆知識), shown one at a time while the world loads. */
+  setTips(tips: Array<{ head: string; text: string }>): void {
+    this.tips = tips
+    this.startTips()
+  }
+
+  private startTips(): void {
+    if (this.tipTimer || !this.tips.length || this.loading.classList.contains('done')) return
+    const el = this.root.querySelector('.loading-tip') as HTMLDivElement
+    const show = () => {
+      const t = this.tips[Math.floor(Math.random() * this.tips.length)]
+      el.classList.remove('show')
+      setTimeout(() => {
+        el.innerHTML = `<b>豆知識 · ${t.head}</b>${t.text}`
+        el.classList.add('show')
+      }, 400)
+    }
+    show()
+    this.tipTimer = setInterval(show, 9000)
   }
 
   showPlace(card: PlaceCard): void {

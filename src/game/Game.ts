@@ -45,6 +45,7 @@ import { Fireworks } from '../world/Fireworks'
 import { festivalsNear, type Festival } from '../data/festivals'
 import { airportNear, destinations, flightFare, flightKm, flightMinutes, type Airport } from '../transit/flights'
 import { PREFECTURES } from '../data/prefectures'
+import { DISCOVERIES } from '../tourism/Journal'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
 
@@ -265,6 +266,10 @@ export class Game {
       const j = this.clock.jst
       return `${j.year}-${String(j.month).padStart(2, '0')}-${String(j.day).padStart(2, '0')}`
     }
+    this.hud.setTips([
+      ...Object.values(DISCOVERIES).map((d) => ({ head: `${d.ja} ${d.en}`, text: d.text })),
+      ...PREFECTURES.map((p) => ({ head: `${p.ja} ${p.en}`, text: p.fact })),
+    ])
     this.activity = new ActivityPanel(ui, {
       wallet: () => this.wallet,
       pay: (yen, method) => {

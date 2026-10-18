@@ -3,6 +3,7 @@
 // in Japan, the planned route with transfers, time and fare, and the IC-card
 // ticket gate.
 import type { RailNetwork, Route, Station } from '../transit/RailNetwork'
+import { ekibenAt } from '../data/ekiben'
 
 export interface StationPanelHooks {
   wallet: () => { cash: number; ic: number }
@@ -10,6 +11,8 @@ export interface StationPanelHooks {
   board: (route: Route) => void
   close: () => void
   here: () => { lat: number; lon: number }
+  /** Buy a station bento (駅弁) to eat on the train. */
+  ekiben: (name: string, price: number) => boolean
 }
 
 const POPULAR = ['東京', '新宿', '渋谷', '浅草', '上野', '秋葉原', '京都', '新大阪', '名古屋', '博多', '広島', '金沢', '仙台', '札幌', '奈良', '鎌倉']
@@ -75,6 +78,14 @@ export class StationPanel {
           .join('')}</div>
         <div class="st-wallet">IC card <b>¥${w.ic.toLocaleString()}</b> · cash ¥${w.cash.toLocaleString()}
           <span class="st-charge">Charge: <button data-y="1000">¥1,000</button><button data-y="3000">¥3,000</button><button data-y="5000">¥5,000</button></span></div>
+        ${(() => {
+          const bento = ekibenAt(s.ja, lines.some((l) => l.kind === 'shinkansen'))
+          return bento.length
+            ? `<div class="st-ekiben"><span>駅弁 <em>station bento</em></span>${bento
+                .map((b, i) => `<button data-e="${i}" title="${esc(b[1])}"><b>${esc(b[0])}</b> ¥${b[2].toLocaleString()}</button>`)
+                .join('')}</div>`
+            : ''
+        })()}
         <input class="st-search" placeholder="Where to? 駅名 / station (e.g. Kyoto, 浅草, しぶや)" autocomplete="off" />
         <div class="st-results"></div>
         <div class="st-popular">${POPULAR.filter((p) => p !== s.ja)
@@ -93,6 +104,16 @@ export class StationPanel {
       b.addEventListener('click', () => {
         const hit = net.search(b.dataset.q!, 1)[0]
         if (hit) this.plan(hit)
+      }),
+    )
+    this.el.querySelectorAll<HTMLButtonElement>('.st-ekiben button').forEach((b) =>
+      b.addEventListener('click', () => {
+        const e = ekibenAt(s.ja, lines.some((l) => l.kind === 'shinkansen'))[Number(b.dataset.e)]
+        if (e && this.hooks.ekiben(e[0], e[2])) {
+          const r = this.route
+          this.render()
+          if (r) this.showRoute(r)
+        }
       }),
     )
     this.el.querySelectorAll<HTMLButtonElement>('.st-charge button').forEach((b) =>

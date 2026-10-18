@@ -159,6 +159,8 @@ export class Game {
   private ferryTracer = new FerryTracer()
   private ferry: { route: FerryRoute; dest: string; pts: LL[]; cum: number[]; total: number; s: number; v: number; vmax: number; ship: FerryShip; head: number; arrived: boolean; t: number } | null = null
   avatar: Person | null = null
+  private bento: string | null = null
+  private bentoTimer = 0
   private avatarName = ''
   private dressing = false
   private dressTimer = 4
@@ -238,6 +240,19 @@ export class Game {
         return true
       },
       board: (route) => this.boardTrain(route),
+      ekiben: (name, price) => {
+        if (this.bento) {
+          this.hud.toast(`You already have a ${this.bento} for the journey.`)
+          return false
+        }
+        if (!this.pay(price, 'ic')) return false
+        this.bento = name
+        this.bentoTimer = 0
+        this.sound.play('ic')
+        this.journal.discover('ekiben')
+        this.hud.toast(`<b>${name}</b>, wrapped and tied with string. Save it for the train — eating on the platform is not the done thing.`, 6000)
+        return true
+      },
       close: () => this.stationPanel.hide(),
       here: () => {
         const g = this.world.geodeticFromWorld(this.player.feet)
@@ -1228,6 +1243,11 @@ export class Game {
       exit: input.hit('KeyE'),
       view: input.hit('KeyV'),
     })
+    // A long ride and a bento: open it once the train is under way.
+    if (this.bento && this.rail.run?.state === 'run' && (this.bentoTimer += dt) > 20) {
+      this.hud.toast(`いただきます — you untie the string and open your <b>${this.bento}</b>. On long-distance trains, eating at your seat is perfectly normal; take the box with you when you leave.`, 8000)
+      this.bento = null
+    }
     const t = this.rail.cameraTarget()
     if (!t) return
     // The view turns with the train; mouse-look is an offset on top.

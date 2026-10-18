@@ -23,6 +23,9 @@ real population and station ridership driving the crowds, and the real weather r
   are traced from OpenStreetMap across the sea to the far port (the ten-minute JR hop to Miyajima, the
   Kerama islands from Naha, the 740 km overnight boat from Ōarai to Tomakomai). Stand on deck as the
   coast slides by, or skip ahead (<kbd>T</kbd>) on long voyages.
+- **Domestic flights** — check in at any of 31 airports and fly the real network (hubs to everywhere,
+  island hops via Naha and Kagoshima, no planes where the Shinkansen is quicker); the clock moves on by
+  the block time and you walk out of arrivals at the other end.
 - **Taxis and buses** — hail a taxi (<kbd>H</kbd>), pick a destination on the map, watch the Tokyo meter.
   Buses follow the local rules: a flat fare paid at the front as you board in Tokyo, Yokohama,
   Kawasaki and Nagoya; flat fares paid on the way out in Kyoto and Osaka; and everywhere else the

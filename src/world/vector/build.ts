@@ -1019,6 +1019,21 @@ export function buildTile(req: BuildRequest): TileBuild {
     }
   }
 
+  // Airports (the label sits on the airfield): somewhere to catch a flight.
+  const al = tile.layers.aerodrome_label
+  if (al) {
+    for (let i = 0; i < al.length; i++) {
+      const f = al.feature(i)
+      const g = f.loadGeometry()[0]?.[0]
+      if (!g) continue
+      const p = extentToLocal(al.extent, g.x, g.y)
+      if (!inTile(p)) continue
+      const pr = f.properties
+      const v = V(p[0], p[1], ground(p[0], p[1]))
+      pois.push({ name: String(pr['name:ja'] ?? pr.name ?? ''), nameEn: String(pr['name:en'] ?? pr.name_en ?? ''), cls: 'aerodrome', sub: String(pr.iata ?? ''), lat: latOf(p[1]), lon: lonOf(p[0]), x: v[0], y: v[1], z: v[2] })
+    }
+  }
+
   // ---------------------------------------------------------------- places
   const places: Place[] = []
   const plc = tile.layers.place

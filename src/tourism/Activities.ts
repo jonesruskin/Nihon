@@ -7,7 +7,7 @@ import type { Poi } from '../world/vector/build'
 import type { Journal } from './Journal'
 import { OMIYAGE } from '../data/prefectures'
 
-export type SpotKind = 'vending' | 'konbini' | 'ramen' | 'food' | 'cafe' | 'izakaya' | 'shrine' | 'temple' | 'hotel' | 'onsen' | 'souvenir' | 'arcade' | 'karaoke' | 'ferry'
+export type SpotKind = 'vending' | 'konbini' | 'ramen' | 'food' | 'cafe' | 'izakaya' | 'shrine' | 'temple' | 'hotel' | 'onsen' | 'souvenir' | 'arcade' | 'karaoke' | 'ferry' | 'airport'
 
 export interface Spot {
   kind: SpotKind
@@ -30,6 +30,8 @@ export interface ActivityHost {
   sound: (name: 'ic' | 'can' | 'bell' | 'clap' | 'coin' | 'chime') => void
   /** Boats leaving from this terminal (traced from the map; may take a moment). */
   ferryDepartures: (s: Spot) => Promise<Array<{ label: string; sub: string; price: number; board: () => void }>>
+  /** Domestic flights from the airport at this spot (empty if none). */
+  flights: (s: Spot) => Array<{ label: string; sub: string; price: number; board: () => void }>
   /** The prefecture you are in, for its local specialities (名物). */
   prefecture: () => { code: number; ja: string; en: string } | null
 }
@@ -46,6 +48,7 @@ function classify(p: Poi): SpotKind | null {
     return p.cls === 'place_of_worship' ? 'temple' : null
   }
   if (/温泉|の湯|湯屋|銭湯|スパ/.test(n) || p.sub === 'public_bath') return 'onsen'
+  if (p.cls === 'aerodrome' || (/空港/.test(n) && /ターミナル|ビル$|空港$/.test(n) && p.sub !== 'bus_stop' && p.cls !== 'bus')) return 'airport'
   if (p.cls === 'ferry_terminal' || p.sub === 'ferry_terminal' || /フェリー(乗り場|のりば|ターミナル)|旅客ターミナル|渡船|連絡船|汽船|高速船乗り場/.test(n)) return 'ferry'
   if (p.sub === 'gift' || /土産|みやげ|物産|特産|銘菓|名産/.test(n)) return 'souvenir'
   if (p.sub === 'amusement_arcade' || /ゲームセンター|ゲーセン|タイトーステーション|GiGO|ギーゴ|セガ|ラウンドワン|namco|ナムコ|モーリーファンタジー/i.test(n)) return 'arcade'
@@ -91,7 +94,7 @@ export class SpotIndex {
     let best: Spot | null = null
     let bd = Infinity
     for (const s of this.spots) {
-      const reach = s.kind === 'vending' ? 2.2 : s.kind === 'shrine' || s.kind === 'temple' ? 40 : 16
+      const reach = s.kind === 'vending' ? 2.2 : s.kind === 'shrine' || s.kind === 'temple' ? 40 : s.kind === 'airport' ? 120 : 16
       const d = Math.hypot(s.pos.x - p.x, s.pos.z - p.z)
       if (d < reach && Math.abs(s.pos.y - p.y) < 8 && d / reach < bd) {
         bd = d / reach
@@ -118,6 +121,7 @@ export function spotPrompt(s: Spot): string {
     arcade: 'Go into the game centre',
     karaoke: 'Sing karaoke',
     ferry: 'Buy a ferry ticket',
+    airport: 'Check in for a flight',
   }
   return `<kbd>E</kbd>${label[s.kind]} <span style="opacity:.75">${esc(s.name)}</span>`
 }
@@ -211,6 +215,8 @@ export class ActivityPanel {
         const p = this.host.prefecture()
         return `Shelves of beautifully wrapped boxes${p ? ` — the specialities of <b>${p.ja}</b> (${p.en})` : ''}. Individually wrapped sweets are made for sharing.`
       }
+      case 'airport':
+        return 'The departure board flickers over the check-in counters. Domestic security takes minutes — liquids can stay in your bag.'
       case 'ferry':
         return 'A ticket window (乗船券売り場), benches, and a board of departures. Boats leave on the minute.'
       case 'arcade':
@@ -313,6 +319,12 @@ export class ActivityPanel {
               `The clerk wraps it in the shop’s paper and offers a spare bag for each gift (おみやげ用の袋). Back home — or at work tomorrow — it is shared with everyone: travel brings something back for the people who stayed.`,
           }
         })
+      }
+      case 'airport': {
+        const list = H.flights(s)
+        if (!list.length) return []
+        j.discover('flight')
+        return list.map((d) => ({ label: d.label, sub: d.sub, price: d.price, method: 'ic' as const, run: () => d.board() }))
       }
       case 'ferry':
         return [
@@ -451,7 +463,7 @@ function drawFortune(): { rank: string; en: string; bad: boolean; lines: string[
 }
 
 function kindName(k: SpotKind): string {
-  return { vending: 'Vending machine', konbini: 'Convenience store', ramen: 'Noodle shop', food: 'Restaurant', cafe: 'Café', izakaya: 'Izakaya', shrine: 'Shinto shrine', temple: 'Buddhist temple', hotel: 'Hotel', onsen: 'Hot spring', souvenir: 'Souvenir shop', arcade: 'Game centre', karaoke: 'Karaoke', ferry: 'Ferry terminal' }[k]
+  return { vending: 'Vending machine', konbini: 'Convenience store', ramen: 'Noodle shop', food: 'Restaurant', cafe: 'Café', izakaya: 'Izakaya', shrine: 'Shinto shrine', temple: 'Buddhist temple', hotel: 'Hotel', onsen: 'Hot spring', souvenir: 'Souvenir shop', arcade: 'Game centre', karaoke: 'Karaoke', ferry: 'Ferry terminal', airport: 'Airport' }[k]
 }
 
 function esc(s: string): string {

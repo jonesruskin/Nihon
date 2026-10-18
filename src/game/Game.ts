@@ -41,6 +41,7 @@ import { AddressLookup } from '../core/address'
 import { busRule, distanceFare, type BusRule } from '../transit/busFare'
 import { FerryTracer, distM, ferryFare, ferrySpeed, type FerryRoute, type LL } from '../transit/ferry'
 import { createFerry, type FerryShip } from '../transit/ferryModel'
+import { airportNear, destinations, flightFare, flightKm, flightMinutes, type Airport } from '../transit/flights'
 import { PREFECTURES } from '../data/prefectures'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
@@ -262,6 +263,21 @@ export class Game {
       },
       sound: (n) => this.sound.play(n),
       ferryDepartures: (spot) => this.ferryDepartures(spot.pos),
+      flights: (spot) => {
+        const g = this.world.geodeticFromWorld(spot.pos)
+        const from = airportNear(g.lat, g.lon)
+        if (!from) return []
+        return destinations(from).map((b) => {
+          const km = flightKm(from, b)
+          const min = flightMinutes(km)
+          return {
+            label: b.ja,
+            sub: `✈ ${b.code} ${b.en} · ${Math.round(km)} km · ${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')}`,
+            price: flightFare(km),
+            board: () => void this.fly(from, b),
+          }
+        })
+      },
       prefecture: () => {
         const code = this.address.last?.prefCode
         return PREFECTURES.find((x) => x.code === code) ?? null
@@ -517,6 +533,17 @@ export class Game {
    * Don't start the player nose-to-wall: if the requested heading is blocked
    * within a few metres, turn to the most open direction nearest to it.
    */
+  /** Check in, fly, and walk out of the arrivals hall at the other end. */
+  private async fly(from: Airport, to: Airport): Promise<void> {
+    const min = flightMinutes(flightKm(from, to))
+    this.journal.discover('flight')
+    this.hud.toast(`Bag drop, a quick security check, and boarding at the gate with a QR code. ✈ ${from.code} → ${to.code}`, 6000)
+    // Arrive at the airport ~40 min ahead; the flight itself takes `min`.
+    this.clock.advance((min + 40) * 60)
+    await this.travelTo(to.lat, to.lon, undefined, undefined, `✈ ${from.ja} → ${to.ja} · ${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`)
+    this.hud.toast(`Welcome to <b>${to.ja}</b> (${to.en}). Trains, buses and taxis leave from outside arrivals.`, 7000)
+  }
+
   /** Departures from the ferry terminal at a world position, for the ticket window. */
   private async ferryDepartures(at: Vector3): Promise<Array<{ label: string; sub: string; price: number; board: () => void }>> {
     const g = this.world.geodeticFromWorld(at)

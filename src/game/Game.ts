@@ -46,6 +46,7 @@ import { festivalsNear, type Festival } from '../data/festivals'
 import { airportNear, destinations, flightFare, flightKm, flightMinutes, type Airport } from '../transit/flights'
 import { PREFECTURES } from '../data/prefectures'
 import { DISCOVERIES } from '../tourism/Journal'
+import { TouchControls } from '../ui/TouchControls'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
 
@@ -113,6 +114,7 @@ export class Game {
   readonly rig: CameraRig
   readonly characters = new CharacterLibrary()
   readonly hud: Hud
+  private touch: TouchControls
   readonly vehicles: VehicleManager
   readonly traffic: Traffic
   readonly map: MapView
@@ -191,6 +193,7 @@ export class Game {
     this.vehicles = new VehicleManager(this.physics, this.vector)
     this.traffic = new Traffic(this.physics, this.vector)
     this.input = new Input(canvas)
+    this.touch = new TouchControls(ui, this.input)
     this.player = new Player(this.physics)
     this.rig = new CameraRig(this.pipeline.camera, this.physics)
     const scene = this.pipeline.scene
@@ -1616,6 +1619,7 @@ export class Game {
     const wd = ['日', '月', '火', '水', '木', '金', '土'][j.weekday]
     this.hud.setClock(`${j.month}月${j.day}日(${wd})  ${pad(j.hour)}:${pad(j.minute)} JST   ${this.weather.label()}`)
     this.hud.setCompass(this.rig.yaw)
+    this.touch.update()
     this.placeTimer += dt
     if (this.placeTimer > 1.5 && this.mode !== 'loading') {
       this.placeTimer = 0

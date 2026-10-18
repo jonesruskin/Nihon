@@ -69,6 +69,12 @@ export class Input {
     }
   }
 
+  /** The on-screen move stick, for drawing it: origin and deflection (-1..1), or null. */
+  get stick(): { ox: number; oy: number; x: number; y: number } | null {
+    const t = this.touchMove
+    return t.id < 0 ? null : { ox: t.ox, oy: t.oy, x: t.x, y: t.y }
+  }
+
   isDown(code: string): boolean {
     return this.enabled && this.down.has(code)
   }

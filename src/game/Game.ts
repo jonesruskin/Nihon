@@ -47,6 +47,7 @@ import { airportNear, destinations, flightFare, flightKm, flightMinutes, type Ai
 import { PREFECTURES } from '../data/prefectures'
 import { DISCOVERIES } from '../tourism/Journal'
 import { TouchControls } from '../ui/TouchControls'
+import { BENCH_STOPS, Bench } from './Bench'
 import { StationPanel } from '../ui/StationPanel'
 import type { Station } from '../transit/RailNetwork'
 
@@ -140,7 +141,9 @@ export class Game {
   private currentPref = 0
   private autoQualityTimer = 0
   private autoQualityDrops = 0
-  private explicitQuality = new URLSearchParams(location.search).has('quality')
+  private bench = new URLSearchParams(location.search).has('bench') ? new Bench() : null
+  private benchSpin = false
+  private explicitQuality = new URLSearchParams(location.search).has('quality') || this.bench !== null
   private placedTimer = 0
   private nearSpot: Spot | null = null
   private purchases = 0
@@ -462,6 +465,34 @@ export class Game {
     this.hud.setLoading(1, '')
     this.hud.hideLoading()
     this.updateHints()
+    if (this.bench) void this.runBench()
+  }
+
+  /** ?bench: a turn on the spot at three kinds of place, then a report. */
+  private async runBench(): Promise<void> {
+    const b = this.bench!
+    const r = this.pipeline.renderer
+    const wait = (ms: number) => new Promise((res) => setTimeout(res, ms))
+    r.info.autoReset = false
+    for (const stop of BENCH_STOPS) {
+      await this.travelTo(stop.lat, stop.lon, undefined, undefined, `Benchmark · ${stop.name}`)
+      await wait(6000) // let streaming settle
+      this.benchSpin = true
+      b.begin()
+      await wait(20000)
+      b.end(stop.name)
+      this.benchSpin = false
+    }
+    r.info.autoReset = true
+    const gl = r.getContext()
+    const ext = gl.getExtension('WEBGL_debug_renderer_info')
+    const gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'GPU unknown'
+    const panel = document.createElement('div')
+    panel.className = 'bench'
+    panel.innerHTML = b.html(this.params.quality, gpu)
+    this.hud.root.appendChild(panel)
+    ;(window as unknown as { nihonBench: unknown }).nihonBench = { quality: this.params.quality, gpu, results: b.results }
+    console.table(b.results)
   }
 
   /** Rendering + streaming budget per quality tier. */
@@ -1069,7 +1100,7 @@ export class Game {
     this.placedTimer -= dt
     if (this.placedTimer <= 0 && this.mode !== 'loading') {
       this.placedTimer = 3
-      this.placed.update(this.vector.readyTiles)
+      this.placed.update(this.vector.readyTiles, focus)
     }
     this.forestTimer -= dt
     if (this.forestTimer <= 0 && this.mode !== 'loading' && this.mode !== 'train') {
@@ -1079,7 +1110,13 @@ export class Game {
     this.updateDiscoveries(dt)
     this.updateSound(dt)
     if (this.liveTime && Math.abs(this.clock.date.getTime() - Date.now()) > 120_000 && this.mode !== 'train') this.liveTime = false
+    if (this.benchSpin) this.rig.yaw += dt * ((Math.PI * 2) / 20)
     this.pipeline.render(dt)
+    if (this.bench) {
+      const info = this.pipeline.renderer.info
+      this.bench.sample(realDt, info.render.calls, info.render.triangles)
+      info.reset()
+    }
     this.updateHud(dt)
     input.endFrame()
   }

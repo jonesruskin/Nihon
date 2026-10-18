@@ -77,6 +77,15 @@ URL parameters: `?lat=35.0&lon=135.77&heading=90` start position · `t=2026-04-0
 | P / Space | photo mode / save photo |
 | F / G | fly / land |
 
+On phones and tablets: drag anywhere on the left half to walk (or drive), drag on the right half to
+look, and use the on-screen buttons for use, jump, run, view, skip, taxi, map and phone.
+
+### Benchmark
+
+Open the game with `?bench` (optionally `&quality=high`) to run a fixed test: it visits Shibuya, Gion
+and the Iya valley, turns a full circle at each and shows frame-time percentiles (p50/p95/p99), draw
+calls and triangles per frame. `JSON.stringify(nihonBench)` in the console copies the numbers.
+
 ## How it works
 
 | Layer | Source | Notes |

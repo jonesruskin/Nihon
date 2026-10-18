@@ -36,7 +36,10 @@ const GREAT_TORII: Array<{ shrine: RegExp; h: number }> = [
 ]
 const TORII_MODEL_H = 5.5
 
-const MODELS: Record<string, number> = { torii: 160, lantern_stone: 400, postbox_red: 120, bicycle: 900, bicycle_yellow: 600 }
+const MODELS: Record<string, number> = { torii: 160, lantern_stone: 400, postbox_red: 120, bicycle: 500, bicycle_yellow: 350 }
+// How far from the player each kind is worth drawing (m): a bicycle rack is
+// detail, a great torii is a landmark.
+const RANGE: Record<string, number> = { torii: 1500, lantern_stone: 500, postbox_red: 300, bicycle: 250, bicycle_yellow: 250 }
 
 export class PlacedProps {
   readonly root = new Group()
@@ -86,13 +89,30 @@ export class PlacedProps {
 
   invalidate(): void {
     this.sig = ''
+    this.cell = ''
   }
 
-  update(tiles: TileLike[]): void {
+  update(tiles: TileLike[], focus: Vector3): void {
     if (!this.ready) return
+    // Placements are worked out when the tiles change; as the player moves
+    // (every ~60 m) only the in-range subset is re-written.
     const sig = tiles.map((t) => t.key).join('|')
-    if (sig === this.sig) return
-    this.sig = sig
+    if (sig !== this.sig) {
+      this.sig = sig
+      this.place = this.compute(tiles)
+      this.onColliders?.(this.colliders)
+      this.cell = ''
+    }
+    const cell = `${Math.round(focus.x / 60)},${Math.round(focus.z / 60)}`
+    if (cell === this.cell) return
+    this.cell = cell
+    this.write(focus)
+  }
+
+  private place: Record<string, Placement[]> = {}
+  private cell = ''
+
+  private compute(tiles: TileLike[]): Record<string, Placement[]> {
     const place: Record<string, Placement[]> = {}
     for (const id of this.kinds.keys()) place[id] = []
     this.colliders = []
@@ -217,13 +237,19 @@ export class PlacedProps {
         place[id]?.push({ pos, yaw: Math.atan2(side.x * s, side.z * s) + (rand(i + p.w.x) - 0.5) * 0.25, scale: 1 })
       }
     }
-    // Write instances.
+    return place
+  }
+
+  private write(focus: Vector3): void {
+    const place = this.place
     const m4 = new Matrix4()
     const q = new Quaternion()
     const up = new Vector3(0, 1, 0)
-    for (const [id, list] of Object.entries(place)) {
+    for (let [id, list] of Object.entries(place)) {
       const k = this.kinds.get(id)
       if (!k) continue
+      const r = RANGE[id] ?? 500
+      list = list.filter((pl) => Math.hypot(pl.pos.x - focus.x, pl.pos.z - focus.z) < r)
       const n = Math.min(k.cap, list.length)
       for (const im of k.meshes) {
         for (let i = 0; i < n; i++) {
@@ -235,6 +261,5 @@ export class PlacedProps {
         im.instanceMatrix.needsUpdate = true
       }
     }
-    this.onColliders?.(this.colliders)
   }
 }

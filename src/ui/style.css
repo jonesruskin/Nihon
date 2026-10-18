@@ -237,3 +237,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d10; col
 .touch button span { font-size: 9px; opacity: .75; letter-spacing: .04em; }
 .touch button.down, .touch button.on { background: rgba(214,63,47,.75); border-color: rgba(255,255,255,.6); }
 body.is-touch .hud .hints { display: none; }
+
+/* ?bench results */
+.hud .bench { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(250,248,243,.97); color: #1d1b18; border-radius: 12px; padding: 18px 22px; font: 13px 'Noto Sans JP', sans-serif; pointer-events: auto; z-index: 60; box-shadow: 0 12px 40px rgba(0,0,0,.35); max-width: 94vw; overflow-x: auto; }
+.hud .bench h3 { margin: 0 0 4px; font-size: 16px; }
+.hud .bench p { margin: 6px 0; color: #6b665d; }
+.hud .bench table { border-collapse: collapse; }
+.hud .bench th, .hud .bench td { padding: 4px 10px; text-align: right; border-bottom: 1px solid #e4e0d7; white-space: nowrap; }
+.hud .bench th:first-child, .hud .bench td:first-child { text-align: left; }

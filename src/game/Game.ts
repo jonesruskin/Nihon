@@ -41,6 +41,8 @@ import { AddressLookup } from '../core/address'
 import { busRule, distanceFare, type BusRule } from '../transit/busFare'
 import { FerryTracer, distM, ferryFare, ferrySpeed, type FerryRoute, type LL } from '../transit/ferry'
 import { createFerry, type FerryShip } from '../transit/ferryModel'
+import { Fireworks } from '../world/Fireworks'
+import { festivalsNear, type Festival } from '../data/festivals'
 import { airportNear, destinations, flightFare, flightKm, flightMinutes, type Airport } from '../transit/flights'
 import { PREFECTURES } from '../data/prefectures'
 import { StationPanel } from '../ui/StationPanel'
@@ -124,6 +126,10 @@ export class Game {
   readonly sound = new Soundscape()
   readonly placed = new PlacedProps()
   forest!: ForestFill
+  readonly fireworks = new Fireworks()
+  private festTimer = 0
+  private festNow: Festival | null = null
+  private festNoticed = new Set<string>()
   private forestTimer = 0
   readonly nearPeople: NearPeople
   readonly address = new AddressLookup()
@@ -185,7 +191,8 @@ export class Game {
     this.rig = new CameraRig(this.pipeline.camera, this.physics)
     const scene = this.pipeline.scene
     this.forest = new ForestFill(this.vector.trees)
-    scene.add(this.forest.root)
+    scene.add(this.forest.root, this.fireworks.root)
+    this.fireworks.onBoom = (d, big) => this.sound.boom(d, big)
     scene.add(this.terrain.root, this.plateau.root, this.vector.root, this.player.object, this.vehicles.root, this.traffic.root, this.crowd.root, this.weather.precip.mesh, this.placed.root, this.nearPeople.root)
     const wp = new URLSearchParams(location.search).get('weather')
     if (wp) this.weather.preset = wp as WeatherPreset
@@ -702,6 +709,38 @@ export class Game {
     this.updateHints()
   }
 
+  /** Fireworks festivals: an evening notice, then the show itself. */
+  private updateFestivals(dt: number): void {
+    const cam = this.pipeline.camera
+    this.festTimer -= dt
+    if (this.festTimer <= 0 && this.mode !== 'loading') {
+      this.festTimer = 2
+      const g = this.world.geodeticFromWorld(cam.position)
+      const j = this.clock.jst
+      const near = festivalsNear(g.lat, g.lon, j.year, j.month, j.day, j.weekday, j.hourFloat, 30, 4)
+      const f = near[0] ?? null
+      this.festNow = f && j.hourFloat >= f.from ? f : null
+      if (f) {
+        const key = `${f.ja}${j.year}-${j.month}-${j.day}`
+        const km = Math.hypot((f.lat - g.lat) * 111.13, (f.lon - g.lon) * 111.41 * Math.cos((g.lat * Math.PI) / 180))
+        if (!this.festNoticed.has(key)) {
+          this.festNoticed.add(key)
+          const hh = (h: number) => `${Math.floor(h)}:${String(Math.round((h % 1) * 60)).padStart(2, '0')}`
+          this.hud.toast(`🎆 ${this.festNow ? 'Now' : 'Tonight'}: <b>${f.ja}</b> ${hh(f.from)}–${hh(f.to)}, ${km < 1 ? 'right here' : `${km.toFixed(km < 10 ? 1 : 0)} km away`}. ${f.blurb}`, 11000)
+        }
+        if (this.festNow && km < 15) this.journal.discover('hanabi')
+      }
+    }
+    const f = this.festNow
+    let origin: Vector3 | null = null
+    if (f) {
+      const h = this.terrain.heightAt(f.lat, f.lon)
+      origin = this.world.worldFromGeodetic(f.lat, f.lon, Number.isFinite(h) ? Math.max(0, h) : 0)
+    }
+    this.fireworks.setScale(this.pipeline.renderer.domElement.height / (2 * Math.tan((cam.fov * Math.PI) / 360)))
+    this.fireworks.update(dt, f, origin, f ? f.to - this.clock.jst.hourFloat : 0, cam.position)
+  }
+
   /** Fill the woods around the player at real forest density. */
   private updateForest(at: Vector3): void {
     const probe = new Vector3()
@@ -983,6 +1022,7 @@ export class Game {
         void this.dressAvatar()
       }
     }
+    this.updateFestivals(dt)
     this.pipeline.update(dt, focus)
     updateWater(this.elapsed)
     buildingUniforms.uNight.value = night
@@ -1130,6 +1170,9 @@ export class Game {
         rain: this.weather.rainFactor,
         hotspot,
       })
+      // A fireworks night: the riverbanks fill from an hour or two before.
+      const fest = festivalsNear(g.lat, g.lon, j.year, j.month, j.day, j.weekday, j.hourFloat, 2.5, 1.5)[0]
+      if (fest) this.pedDensity = Math.min(400, this.pedDensity * 3 + 40)
     }
     this.crowd.player = this.mode === 'onfoot' && this.player.body ? this.player.feet : null
     this.crowd.update(dt, at, this.pedDensity, this.elapsed)
@@ -1210,6 +1253,21 @@ export class Game {
   private lastTrainView = ''
 
   /** Debug/test: board the fastest route between two stations by name. */
+  /** Debug: run the fireworks for a few seconds now and look toward them. */
+  debugFireworks(seconds = 6): string {
+    this.festTimer = 0
+    this.updateFestivals(0)
+    const f = this.festNow
+    if (!f) return 'no festival'
+    const cam = this.pipeline.camera
+    const h = this.terrain.heightAt(f.lat, f.lon)
+    const o = this.world.worldFromGeodetic(f.lat, f.lon, Number.isFinite(h) ? Math.max(0, h) : 0)
+    for (let t = 0; t < seconds; t += 0.05) this.fireworks.update(0.05, f, o, f.to - this.clock.jst.hourFloat, cam.position)
+    this.rig.yaw = Math.atan2(-(o.x - cam.position.x), -(o.z - cam.position.z))
+    this.rig.pitch = 0.32
+    return `${f.ja} ${Math.round(o.distanceTo(cam.position))} m`
+  }
+
   /** Debug: board the i-th departure from the nearest ferry terminal. */
   async debugFerry(i = 0): Promise<string> {
     this.spots.update(this.vector.readyTiles)

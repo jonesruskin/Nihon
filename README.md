@@ -37,7 +37,10 @@ real population and station ridership driving the crowds, and the real weather r
   long sleeves in January.
 - **Weather and seasons** — live weather at your spot (or the recorded weather for any past date):
   clouds, rain with wet streets and umbrellas, snow that settles, fog, typhoons; the sakura front in
-  spring and autumn colours in November, by latitude and altitude. Woods are filled in at true
+  spring and autumn colours in November, by latitude and altitude. Fireworks festivals (花火大会)
+  fire on their real nights — Sumidagawa, Nagaoka, Ōmagari, the Tenjin Matsuri, Lake Tōya every
+  summer evening — with chrysanthemum shells, willows and star mines, crowds on the riverbanks, and
+  the boom arriving after the flash at the speed of sound. Woods are filled in at true
   forest density around you — cedar plantations on the mountains, broadleaf groves in the lowlands.
 - **Be a tourist** — vending machines (hot drinks in winter), konbini, ramen with ticket machines,
   izakaya, kissaten, souvenir shops selling each prefecture’s 名物, game centres, karaoke, shrines

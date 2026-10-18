@@ -187,6 +187,29 @@ export class Soundscape {
     o.stop(t + dur + 0.05)
   }
 
+  /**
+   * A firework's boom, `distance` metres away: it arrives distance/343 s after
+   * the flash, duller (less treble) and quieter the further you are.
+   */
+  boom(distance: number, big: boolean): void {
+    const ctx = this.ctx
+    if (!ctx || this.muted) return
+    const t = ctx.currentTime + distance / 343
+    const src = ctx.createBufferSource()
+    src.buffer = this.noiseBuffer()
+    const lp = ctx.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.value = Math.max(90, 900 - distance * 0.12)
+    const g = ctx.createGain()
+    const peak = Math.min(0.9, (big ? 900 : 450) / Math.max(150, distance))
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.015)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + (big ? 2.2 : 1.3))
+    src.connect(lp).connect(g).connect(this.master)
+    src.start(t)
+    src.stop(t + 2.5)
+  }
+
   /** One-shot effects. */
   play(name: 'ic' | 'can' | 'bell' | 'clap' | 'coin' | 'chime' | 'melody' | 'doors'): void {
     if (!this.ctx) return

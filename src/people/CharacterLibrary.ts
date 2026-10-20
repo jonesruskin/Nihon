@@ -26,6 +26,8 @@ export interface CharacterInfo {
   age: number
   season?: 'summer' | 'winter' | 'any'
   clips: Record<string, number>
+  /** Natural ground speed of each locomotion clip (m/s), measured at bake time. */
+  speeds?: Record<string, number>
 }
 
 const BASE = `${import.meta.env.BASE_URL}models/people/`
@@ -58,7 +60,7 @@ export class CharacterLibrary {
 
   async create(name: string): Promise<Person> {
     const g = await this.load(name)
-    return new Person(name, skeletonClone(g.scene), g.animations)
+    return new Person(name, skeletonClone(g.scene), g.animations, this.manifest.find((m) => m.name === name))
   }
 }
 
@@ -89,8 +91,9 @@ function prepareMaterials(root: Object3D): void {
   })
 }
 
-/** Natural ground speeds of the source mocap clips (m/s). */
+/** Fallback ground speeds (m/s) for models baked before speeds were measured. */
 const CLIP_SPEED: Record<string, number> = { walk: 1.35, run: 3.4 }
+const LOCO = ['walk', 'run']
 
 export class Person {
   readonly object = new Group()
@@ -99,11 +102,15 @@ export class Person {
   private weights: Record<string, number> = { idle: 1, walk: 0, run: 0 }
   private spine: Bone | null = null
   private time = Math.random() * 10
+  /** Locomotion phase (0..1), shared by walk and run so they blend in step. */
+  private loco = Math.random()
+  private strides: Record<string, number> = {}
 
   constructor(
     readonly archetype: string,
     readonly model: Object3D,
     clips: AnimationClip[],
+    info?: CharacterInfo,
   ) {
     // MakeHuman faces +Z after glTF export; our convention is facing -Z.
     model.rotation.y = Math.PI
@@ -118,6 +125,11 @@ export class Person {
       // De-phase crowds so they don't march in lockstep.
       a.time = Math.random() * c.duration
       this.actions.set(c.name, a)
+      // Metres per cycle: walk/run are driven by distance, not by the clock.
+      if (LOCO.includes(c.name)) {
+        this.strides[c.name] = (info?.speeds?.[c.name] ?? CLIP_SPEED[c.name]) * c.duration
+        a.timeScale = 0
+      }
     }
     model.traverse((o) => {
       if ((o as Bone).isBone && o.name === 'Spine1') this.spine = o as Bone
@@ -126,10 +138,11 @@ export class Person {
   }
 
   /**
-   * Blend idle/walk/run by actual ground speed and scale playback so feet
-   * don't slide.
+   * Blend idle/walk/run by actual ground speed; walk and run advance one
+   * cycle per stride covered, so feet don't slide. `phase` (0..1) pins the
+   * cycle, e.g. to the crowd LOD this person replaces.
    */
-  update(dt: number, speed: number): void {
+  update(dt: number, speed: number, phase?: number): void {
     this.time += dt
     const w = this.weights
     const tWalk = speed < 0.15 ? 0 : speed < 2.2 ? 1 : MathUtils.clamp(1 - (speed - 2.2) / 0.8, 0, 1)
@@ -140,10 +153,12 @@ export class Person {
     w.walk += (tWalk - w.walk) * k
     w.run += (tRun - w.run) * k
     const sum = w.idle + w.walk + w.run || 1
+    const runShare = w.run / (w.walk + w.run || 1)
+    const stride = MathUtils.lerp(this.strides.walk ?? 1.5, this.strides.run ?? 2.5, runShare)
+    this.loco = phase ?? (this.loco + (dt * speed) / stride) % 1
     for (const [name, a] of this.actions) {
       a.setEffectiveWeight((w[name] ?? 0) / sum)
-      const base = CLIP_SPEED[name]
-      a.setEffectiveTimeScale(base ? MathUtils.clamp(speed / base, 0.6, 1.8) : 1)
+      if (LOCO.includes(name)) a.time = this.loco * a.getClip().duration
     }
     this.mixer.update(dt)
     // Breathing on top of the idle pose.

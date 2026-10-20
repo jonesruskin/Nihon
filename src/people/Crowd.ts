@@ -19,7 +19,7 @@ import {
 } from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { NavPath } from '../world/vector/build'
-import { createCrowdMesh, crowdTime, loadCrowdArchetypes, type CrowdArchetype } from './crowdModels'
+import { createCrowdMesh, loadCrowdArchetypes, type CrowdArchetype } from './crowdModels'
 
 interface Edge {
   min: Vector3
@@ -67,6 +67,13 @@ interface Ped {
   pos: Vector3
   yaw: number
   phase: number
+  /** Walk cycle position (cycles, advanced by distance walked) and idle loop position. */
+  walkPhase: number
+  idlePhase: number
+  /** 0 walking .. 1 standing, eased so the two blend. */
+  idleW: number
+  /** Body size: people aren't all one height. */
+  scale: number
   umbrella: number // 0 none, 1 clear vinyl, 2 coloured
   umbrellaColor: number
 }
@@ -461,6 +468,10 @@ export class Crowd {
         pos: p,
         yaw: 0,
         phase: Math.random(),
+        walkPhase: Math.random(),
+        idlePhase: Math.random(),
+        idleW: 0,
+        scale: 0.94 + Math.random() * 0.12,
         umbrella: Math.random() < 0.08 ? 0 : Math.random() < 0.6 ? 1 : 2,
         umbrellaColor: [0x15161a, 0x1b2540, 0x3a3f46, 0x5a1d22, 0x2d4a3a, 0x7a6a55][Math.floor(Math.random() * 6)],
       }
@@ -528,8 +539,10 @@ export class Crowd {
   private m4 = new Matrix4()
   private q = new Quaternion()
   private up = new Vector3(0, 1, 0)
+  private scl = new Vector3(1, 1, 1)
   private one = new Vector3(1, 1, 1)
   private zero = new Vector3(0, 0, 0)
+  private dt = 0
 
   /** Pedestrians nearest to a point (for the full-detail near LOD). */
   nearest(p: Vector3, n: number): Ped[] {
@@ -544,9 +557,9 @@ export class Crowd {
    * budget can show over the full radius, the crowd is concentrated around
    * the player at true density instead of being thinned out.
    */
-  update(dt: number, cam: Vector3, perHectare: number, time: number): void {
+  update(dt: number, cam: Vector3, perHectare: number): void {
     if (!this.ready) return
-    crowdTime.value = time
+    this.dt = dt
     const fit = Math.sqrt((this.cap * 10000) / (Math.PI * Math.max(1e-3, perHectare)))
     const r = Math.max(40, Math.min(this.maxRadius, fit))
     this.radius += (r - this.radius) * Math.min(1, dt * 0.5)
@@ -683,7 +696,7 @@ export class Crowd {
       for (const p of this.peds) {
         if (!p.umbrella) continue
         const right = new Vector3(Math.cos(p.yaw), 0, -Math.sin(p.yaw))
-        const at = new Vector3(p.pos.x + right.x * 0.18 + Math.sin(p.yaw) * 0.12, p.pos.y + 1.12, p.pos.z + right.z * 0.18 + Math.cos(p.yaw) * 0.12)
+        const at = new Vector3(p.pos.x + right.x * 0.18 + Math.sin(p.yaw) * 0.12, p.pos.y + 1.12 * p.scale, p.pos.z + right.z * 0.18 + Math.cos(p.yaw) * 0.12)
         this.q.setFromAxisAngle(this.up, p.yaw)
         this.m4.compose(at, this.q, this.one)
         if (p.umbrella === 1) this.umbrellaClear.setMatrixAt(nc++, this.m4)
@@ -705,17 +718,25 @@ export class Crowd {
       const list = this.slotPeds[ai]
       if (!list.length) continue
       const anim = mesh.geometry.getAttribute('aAnim')
-      const fr = this.arch[ai].frames
+      const anim2 = mesh.geometry.getAttribute('aAnim2')
+      const a = this.arch[ai]
+      const fr = a.frames
+      const dt = this.dt
       for (const p of list) {
         this.q.setFromAxisAngle(this.up, p.yaw)
-        mesh.setMatrixAt(p.slot, this.m4.compose(p.pos, this.q, p.near ? this.zero : this.one))
-        const walking = p.speed > 0.25
-        const clip = walking ? fr.walk : fr.idle
-        // Cycle rate matches ground speed so feet don't slide (clip ~1.1 s at 1.35 m/s).
-        anim.setXYZW(p.slot, clip[0], clip[1], p.phase, walking ? p.speed / 1.35 / 1.1 : 0.15)
+        mesh.setMatrixAt(p.slot, this.m4.compose(p.pos, this.q, p.near ? this.zero : this.scl.setScalar(p.scale)))
+        // One walk cycle per stride of ground covered: feet stay planted at
+        // any speed, and slowing down slows the legs rather than skipping.
+        p.walkPhase = (p.walkPhase + (dt * p.speed) / (a.stride * p.scale)) % 1
+        p.idlePhase = (p.idlePhase + dt / a.idleDur) % 1
+        const standing = Math.min(1, Math.max(0, (0.45 - p.speed) / 0.35))
+        p.idleW += (standing - p.idleW) * Math.min(1, dt * 4)
+        anim.setXYZW(p.slot, fr.walk[0], fr.walk[1], p.walkPhase, p.idleW)
+        anim2.setXYZW(p.slot, fr.idle[0], fr.idle[1], p.idlePhase, 0)
       }
       mesh.instanceMatrix.needsUpdate = true
       anim.needsUpdate = true
+      anim2.needsUpdate = true
     }
   }
 

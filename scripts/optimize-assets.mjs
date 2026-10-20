@@ -27,7 +27,7 @@ const JOBS = [
   // People: the player's own model fills the screen in third person.
   ...['player_m', 'player_f', 'player_m_w', 'player_f_w'].map((n) => ['people', n, 1024]),
   ...['casual_m', 'elder_f', 'elder_f_w', 'elder_m', 'office_f', 'salaryman_a', 'salaryman_b', 'salaryman_c', 'student_f', 'student_f_w', 'tourist_f', 'tourist_m', 'tourist_m_w', 'young_f', 'young_f_w', 'young_m', 'young_m2_w', 'young_m_w'].map((n) => ['people', n, 512]),
-].filter(([, n]) => n.includes(filter))
+].filter(([d, n]) => `${d}/${n}`.includes(filter))
 
 const gt = (args) => run('npx', ['gltf-transform', ...args], { maxBuffer: 1 << 26 })
 

@@ -1284,7 +1284,7 @@ export class Game {
       if (fest) this.pedDensity = Math.min(400, this.pedDensity * 3 + 40)
     }
     this.crowd.player = this.mode === 'onfoot' && this.player.body ? this.player.feet : null
-    this.crowd.update(dt, at, this.pedDensity, this.elapsed)
+    this.crowd.update(dt, at, this.pedDensity)
     this.crowdTarget = this.crowd.target
     if (this.nearPeople.max > 0) this.nearPeople.update(dt, this.pipeline.camera.position, this.crowd.nearest(this.pipeline.camera.position, this.nearPeople.max + 2))
   }

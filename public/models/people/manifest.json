@@ -4,168 +4,252 @@
   "file": "player_m.glb",
   "gender": "m",
   "age": 0.5,
+  "season": "summer",
+  "gait": "neutral",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.0667,
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "summer"
+  "speeds": {
+   "walk": 1.433,
+   "run": 3.437,
+   "idle": 0
+  }
  },
  {
   "name": "player_f",
   "file": "player_f.glb",
   "gender": "f",
   "age": 0.48,
+  "season": "summer",
+  "gait": "light",
   "clips": {
    "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "summer"
+  "speeds": {
+   "walk": 0.999,
+   "run": 2.901,
+   "idle": 0
+  }
  },
  {
   "name": "salaryman_a",
   "file": "salaryman_a.glb",
   "gender": "m",
   "age": 0.56,
+  "season": "any",
+  "gait": "brisk",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 0.8333,
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "any"
+  "speeds": {
+   "walk": 1.927,
+   "run": 3.287,
+   "idle": 0
+  }
  },
  {
   "name": "salaryman_b",
   "file": "salaryman_b.glb",
   "gender": "m",
   "age": 0.66,
+  "season": "any",
+  "gait": "steady",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.0333,
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "any"
+  "speeds": {
+   "walk": 1.446,
+   "run": 3.197,
+   "idle": 0
+  }
  },
  {
   "name": "salaryman_c",
   "file": "salaryman_c.glb",
   "gender": "m",
   "age": 0.5,
+  "season": "any",
+  "gait": "relaxed",
   "clips": {
    "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "any"
+  "speeds": {
+   "walk": 1.289,
+   "run": 3.609,
+   "idle": 0
+  }
  },
  {
   "name": "office_f",
   "file": "office_f.glb",
   "gender": "f",
   "age": 0.52,
+  "season": "any",
+  "gait": "light",
   "clips": {
    "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "any"
+  "speeds": {
+   "walk": 1.01,
+   "run": 2.934,
+   "idle": 0
+  }
  },
  {
   "name": "young_f",
   "file": "young_f.glb",
   "gender": "f",
   "age": 0.42,
+  "season": "summer",
+  "gait": "relaxed",
   "clips": {
    "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "summer"
+  "speeds": {
+   "walk": 1.0,
+   "run": 2.801,
+   "idle": 0
+  }
  },
  {
   "name": "young_m",
   "file": "young_m.glb",
   "gender": "m",
   "age": 0.44,
+  "season": "summer",
+  "gait": "loose",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.1333,
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "summer"
+  "speeds": {
+   "walk": 1.014,
+   "run": 3.183,
+   "idle": 0
+  }
  },
  {
   "name": "student_f",
   "file": "student_f.glb",
   "gender": "f",
   "age": 0.36,
+  "season": "summer",
+  "gait": "loose",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.1333,
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "summer"
+  "speeds": {
+   "walk": 0.817,
+   "run": 2.564,
+   "idle": 0
+  }
  },
  {
   "name": "casual_m",
   "file": "casual_m.glb",
   "gender": "m",
   "age": 0.6,
+  "season": "any",
+  "gait": "steady",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.0333,
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "any"
+  "speeds": {
+   "walk": 1.483,
+   "run": 3.278,
+   "idle": 0
+  }
  },
  {
   "name": "elder_m",
   "file": "elder_m.glb",
   "gender": "m",
   "age": 0.86,
+  "season": "any",
+  "gait": "slow",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.3,
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "any"
+  "speeds": {
+   "walk": 0.992,
+   "run": 3.062,
+   "idle": 0
+  }
  },
  {
   "name": "elder_f",
   "file": "elder_f.glb",
   "gender": "f",
   "age": 0.86,
+  "season": "summer",
+  "gait": "slow",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.3,
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "summer"
+  "speeds": {
+   "walk": 0.881,
+   "run": 2.718,
+   "idle": 0
+  }
  },
  {
   "name": "tourist_m",
   "file": "tourist_m.glb",
   "gender": "m",
   "age": 0.5,
+  "season": "summer",
+  "gait": "neutral",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.0667,
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "summer"
+  "speeds": {
+   "walk": 1.688,
+   "run": 4.05,
+   "idle": 0
+  }
  },
  {
   "name": "tourist_f",
   "file": "tourist_f.glb",
   "gender": "f",
   "age": 0.47,
+  "season": "summer",
+  "gait": "steady",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.0333,
+   "run": 0.7333,
+   "idle": 7.2667
   },
-  "season": "summer"
+  "speeds": {
+   "walk": 1.446,
+   "run": 3.196,
+   "idle": 0
+  }
  },
  {
   "name": "player_m_w",
@@ -173,10 +257,16 @@
   "gender": "m",
   "age": 0.5,
   "season": "winter",
+  "gait": "neutral",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.0667,
+   "run": 0.7333,
+   "idle": 7.2667
+  },
+  "speeds": {
+   "walk": 1.433,
+   "run": 3.437,
+   "idle": 0
   }
  },
  {
@@ -185,10 +275,16 @@
   "gender": "f",
   "age": 0.48,
   "season": "winter",
+  "gait": "light",
   "clips": {
    "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "run": 0.7333,
+   "idle": 7.2667
+  },
+  "speeds": {
+   "walk": 0.999,
+   "run": 2.901,
+   "idle": 0
   }
  },
  {
@@ -197,10 +293,16 @@
   "gender": "m",
   "age": 0.42,
   "season": "winter",
+  "gait": "loose",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.1333,
+   "run": 0.7333,
+   "idle": 7.2667
+  },
+  "speeds": {
+   "walk": 0.999,
+   "run": 3.136,
+   "idle": 0
   }
  },
  {
@@ -209,10 +311,16 @@
   "gender": "m",
   "age": 0.47,
   "season": "winter",
+  "gait": "relaxed",
   "clips": {
    "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "run": 0.7333,
+   "idle": 7.2667
+  },
+  "speeds": {
+   "walk": 1.241,
+   "run": 3.477,
+   "idle": 0
   }
  },
  {
@@ -221,10 +329,16 @@
   "gender": "f",
   "age": 0.42,
   "season": "winter",
+  "gait": "relaxed",
   "clips": {
    "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "run": 0.7333,
+   "idle": 7.2667
+  },
+  "speeds": {
+   "walk": 1.0,
+   "run": 2.801,
+   "idle": 0
   }
  },
  {
@@ -233,10 +347,16 @@
   "gender": "f",
   "age": 0.37,
   "season": "winter",
+  "gait": "loose",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.1333,
+   "run": 0.7333,
+   "idle": 7.2667
+  },
+  "speeds": {
+   "walk": 0.822,
+   "run": 2.58,
+   "idle": 0
   }
  },
  {
@@ -245,10 +365,16 @@
   "gender": "f",
   "age": 0.84,
   "season": "winter",
+  "gait": "slow",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.3,
+   "run": 0.7333,
+   "idle": 7.2667
+  },
+  "speeds": {
+   "walk": 0.881,
+   "run": 2.717,
+   "idle": 0
   }
  },
  {
@@ -257,10 +383,16 @@
   "gender": "m",
   "age": 0.5,
   "season": "winter",
+  "gait": "neutral",
   "clips": {
-   "walk": 1.1,
-   "run": 0.7666666666666667,
-   "idle": 0.1
+   "walk": 1.0667,
+   "run": 0.7333,
+   "idle": 7.2667
+  },
+  "speeds": {
+   "walk": 1.688,
+   "run": 4.05,
+   "idle": 0
   }
  }
 ]

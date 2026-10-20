@@ -1,3 +1,4 @@
+import './render/lampsInstall'
 import './ui/style.css'
 import { Game } from './game/Game'
 

@@ -535,11 +535,11 @@ export class Game {
       ultra: { far: 120_000, split: 2.0, near: 1800, vfar: 3200, err: 16, pr: 1600 },
     }[q]
     this.plateau.radius = t.pr
+    this.plateau.errorTarget = t.err
     this.terrain.settings.farRadius = t.far
     this.terrain.settings.splitFactor = t.split
     this.vector.nearRadius = t.near
     this.vector.farRadius = t.vfar
-    this.plateau.errorTarget = t.err
   }
 
   /** Points on streets and footpaths near `at`, nearest first. */

@@ -415,7 +415,7 @@ export class RenderPipeline {
     this.moon.target.updateMatrixWorld()
 
     this.updateCloudSkip()
-    this.lights.update(dt, this.camera.position, this.night)
+    this.lights.update(dt, this.camera, this.night)
     // Sky glow in scene radiance (exposure is applied later): sodium/LED mix,
     // ~3x brighter when low cloud reflects the city back down.
     const g = this.night * (0.15 + 0.85 * this.lights.urban) * 0.0035 * (1 + this.overcast * 2.5)

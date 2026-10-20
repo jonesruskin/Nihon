@@ -127,7 +127,8 @@ export class PlateauManager {
       const m = UNLOAD_MARGIN_DEG
       if (g.lon < b[0] - m || g.lon > b[2] + m || g.lat < b[1] - m || g.lat > b[3] + m) this.deactivate(code)
     }
-    // Far above the city, skip detail (the aerial photo carries it).
+    // Tiles are chosen through a copy of the player's camera whose far plane
+    // is the streaming radius: nothing beyond it is fetched at all.
     const tc = this.tileCam
     this.camera.updateMatrixWorld()
     this.camera.matrixWorld.decompose(tc.position, tc.quaternion, tc.scale)
@@ -159,11 +160,21 @@ export class PlateauManager {
     tiles.parseQueue.maxJobs = 4
     // Leave bandwidth for terrain and streets: they matter more to the player.
     tiles.downloadQueue.maxJobsPerOrigin = 4
+    // Each PLATEAU tile is ~1 MB (mostly attribute tables): don't fetch
+    // off-screen siblings speculatively.
+    tiles.loadSiblings = false
     const active: ActiveCity = { city, tiles, coverage: [], loaded: new Map() }
-    type RawTile = { content?: { boundingVolume?: { region?: number[] } }; boundingVolume: { region?: number[] } }
+    type RawTile = { children?: unknown[]; content?: { boundingVolume?: { region?: number[] } }; boundingVolume: { region?: number[] } }
     const d = 180 / Math.PI
     tiles.addEventListener('load-model', ({ scene, tile }: { scene: Object3D; tile: RawTile }) => {
-      // OSM buildings are hidden exactly where a PLATEAU tile has arrived.
+      // Coarser levels of a ward's tree hold only its biggest buildings (the
+      // stand-ins while the full-detail tile below streams in): OSM, which
+      // has every building, is the better stand-in, so only finest-level
+      // tiles are shown, and OSM is hidden exactly where one has arrived.
+      if (tile.children?.length) {
+        scene.visible = false
+        return
+      }
       const r = tile.content?.boundingVolume?.region ?? tile.boundingVolume.region
       if (r) active.loaded.set(tile, [r[0] * d, r[1] * d, r[2] * d, r[3] * d])
       this.coverageChanged(active)

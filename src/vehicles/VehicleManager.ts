@@ -64,7 +64,7 @@ export class VehicleManager {
       const near = v === this.current || !v.parked || d < 40
       v.object.visible = near
       if (!near) this.far.add(v.spec.id, v.object.position, _fwd.set(0, 0, -1).applyQuaternion(v.object.quaternion), v.model.color)
-      const cast = v === this.current || d < 30
+      const cast = v === this.current || d < 20
       if (v.object.userData.cast !== cast) {
         v.object.userData.cast = cast
         v.object.traverse((o) => {

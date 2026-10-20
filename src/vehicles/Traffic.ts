@@ -275,9 +275,9 @@ export class Traffic {
     const near = this.cars.filter((c) => c.pos.distanceTo(this.camPos) < NEAR || c.passengerAboard).sort((a, b) => a.pos.distanceToSquared(this.camPos) - b.pos.distanceToSquared(this.camPos))
     const keep = new Set(near.slice(0, MAX_NEAR))
     let loads = 0
-    // Shadows from the 8 nearest cars within 30 m only, and never from wheels
+    // Shadows from the 5 nearest cars within 28 m only, and never from wheels
     // (each wheel is its own draw call; the body's shadow covers them).
-    const casters = new Set(near.filter((c) => c.pos.distanceTo(this.camPos) < 30).slice(0, 8))
+    const casters = new Set(near.filter((c) => c.pos.distanceTo(this.camPos) < 28).slice(0, 5))
     for (const c of this.cars) {
       if (c.model) {
         const cast = casters.has(c)

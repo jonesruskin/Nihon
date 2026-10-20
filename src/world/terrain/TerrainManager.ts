@@ -352,7 +352,9 @@ export class TerrainManager {
       group.add(mesh)
       // Only tiles with actual open sea get a water surface (rivers, ponds and
       // land at sea level don't): one draw call per coastal tile is plenty.
-      if (dem.hasSea && dem.minH <= 0.5 && seaShare(dem, id) > 0.01) {
+      // Far away the aerial photo already shows the water: surfaces only nearby
+      // (and on the few big coarse tiles).
+      if (dem.hasSea && dem.minH <= 0.5 && (distance < 6000 || id.z <= 11) && seaShare(dem, id) > 0.01) {
         const sea = new Mesh(buildSeaGeometry(id, frame), this.seaMaterial)
         sea.name = 'sea'
         sea.renderOrder = 1

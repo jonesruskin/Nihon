@@ -258,6 +258,7 @@ export class PlacedProps {
           im.setMatrixAt(i, m4.compose(pl.pos, q, new Vector3(pl.scale, pl.scale, pl.scale)))
         }
         im.count = n
+        im.visible = n > 0
         im.instanceMatrix.needsUpdate = true
       }
     }

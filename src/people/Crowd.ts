@@ -478,6 +478,8 @@ export class Crowd {
       list.push(ped)
       this.peds.push(ped)
       mesh.count = list.length
+    mesh.visible = list.length > 0
+      mesh.visible = list.length > 0
       const tint = mesh.geometry.getAttribute('aTint')
       const tint2 = mesh.geometry.getAttribute('aTint2')
       tint.setXYZW(ped.slot, ...tintA)
@@ -533,6 +535,7 @@ export class Crowd {
     }
     list.pop()
     mesh.count = list.length
+    mesh.visible = list.length > 0
     this.peds.splice(this.peds.indexOf(p), 1)
   }
 
@@ -706,8 +709,11 @@ export class Crowd {
         }
       }
     }
+    // An empty instanced mesh still costs a draw call (twice, with shadows).
     this.umbrellaClear.count = nc
     this.umbrellaSolid.count = ns
+    this.umbrellaClear.visible = nc > 0
+    this.umbrellaSolid.visible = ns > 0
     this.umbrellaClear.instanceMatrix.needsUpdate = true
     this.umbrellaSolid.instanceMatrix.needsUpdate = true
     if (this.umbrellaSolid.instanceColor) this.umbrellaSolid.instanceColor.needsUpdate = true

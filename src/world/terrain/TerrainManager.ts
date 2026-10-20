@@ -350,7 +350,9 @@ export class TerrainManager {
       mesh.name = 'ground'
       mesh.userData.terrain = true
       group.add(mesh)
-      if (dem.hasSea && dem.minH <= 0.5) {
+      // Only tiles with actual open sea get a water surface (rivers, ponds and
+      // land at sea level don't): one draw call per coastal tile is plenty.
+      if (dem.hasSea && dem.minH <= 0.5 && seaShare(dem, id) > 0.01) {
         const sea = new Mesh(buildSeaGeometry(id, frame), this.seaMaterial)
         sea.name = 'sea'
         sea.renderOrder = 1
@@ -407,6 +409,24 @@ export class TerrainManager {
 }
 
 export { GRID_INDICES }
+
+/** Fraction of terrain tile `id` that is open sea, from its (same or parent) DEM tile. */
+function seaShare(dem: DemTile, id: TileId): number {
+  if (!dem.sea) return 0
+  const k = 2 ** Math.max(0, id.z - dem.id.z)
+  const span = 256 / k
+  const x0 = Math.floor((id.x - dem.id.x * k) * span)
+  const y0 = Math.floor((id.y - dem.id.y * k) * span)
+  const step = Math.max(1, Math.floor(span / 24))
+  let n = 0
+  let all = 0
+  for (let y = y0; y < y0 + span; y += step)
+    for (let x = x0; x < x0 + span; x += step) {
+      n += dem.sea[y * 256 + x]
+      all++
+    }
+  return all ? n / all : 0
+}
 
 /** Snow settles on the land (flat ground first), rain darkens it. */
 function patchGroundWeather(mat: MeshStandardMaterial): void {

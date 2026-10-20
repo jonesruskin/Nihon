@@ -125,7 +125,9 @@ export class Traffic {
   update(dt: number, center: Vector3, timeOfDayH: number): void {
     this.time += dt
     this.rebuildTimer += dt
-    if (this.rebuildTimer > 3) {
+    // Rebuild as tiles arrive (every few seconds), and at once on arrival so
+    // the streets are never empty for the first seconds.
+    if (this.rebuildTimer > 3 || (!this.graph.lanes.length && this.vector.readyTiles.length)) {
       this.rebuildTimer = 0
       const tiles = this.vector.readyTiles
       const sig = tiles.map((t) => t.key + t.build.paths.length).join('|')
@@ -163,6 +165,7 @@ export class Traffic {
       else {
         c.lane = hit.lane
         c.s = hit.s
+        c.sub = Math.min(c.sub, hit.lane.lanes - 1)
         c.nextLane = -1
         c.route = []
       }
@@ -271,6 +274,14 @@ export class Traffic {
     const keep = new Set(near.slice(0, MAX_NEAR))
     let loads = 0
     for (const c of this.cars) {
+      // Shadows only where you can see them (the shadow map covers ~90 m anyway).
+      if (c.model) {
+        const cast = c.pos.distanceTo(this.camPos) < 45
+        if (c.model.root.userData.cast !== cast) {
+          c.model.root.userData.cast = cast
+          c.model.root.traverse((o) => ((o as Mesh).isMesh ? ((o as Mesh).castShadow = cast && o.name !== 'lamps') : 0))
+        }
+      }
       const want = keep.has(c) || c.passengerAboard || c.hailed
       if (want && !c.model && !c.loading && loads < 3) {
         loads++

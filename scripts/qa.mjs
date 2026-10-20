@@ -21,8 +21,8 @@ const SCENES = [
   { name: 'shibuya-dusk', q: `${T('10-16', '17:25:00')}&weather=clear&heading=260`, gates: { notBlack: true } },
   { name: 'shibuya-rain', q: `${T('10-16', '15:00:00')}&weather=rain&heading=120`, gates: { notBlack: true } },
   { name: 'shinjuku-day', q: `lat=35.6909&lon=139.7003&${T('10-16', '12:00:00')}&weather=clear&heading=0`, gates: { cars: 10 } },
-  { name: 'residential-day', q: `lat=35.6466&lon=139.6533&${T('10-16', '10:00:00')}&weather=clear&heading=90`, gates: {} },
-  { name: 'residential-night', q: `lat=35.6466&lon=139.6533&${T('10-16', '21:30:00')}&weather=clear&heading=90`, gates: { night: true } },
+  { name: 'residential-day', q: `lat=35.7262&lon=139.7672&${T('10-16', '10:00:00')}&weather=clear&heading=90`, gates: {} },
+  { name: 'residential-night', q: `lat=35.7262&lon=139.7672&${T('10-16', '21:30:00')}&weather=clear&heading=90`, gates: { night: true } },
   { name: 'gion-night', q: `lat=35.0037&lon=135.7752&${T('10-16', '20:30:00')}&weather=clear&heading=90`, gates: { night: true } },
   { name: 'dotonbori-night', q: `lat=34.6687&lon=135.5013&${T('10-16', '21:00:00')}&weather=clear&heading=90`, gates: { night: true } },
   { name: 'sapporo-snow', q: `lat=43.0553&lon=141.3533&${T('01-20', '14:00:00')}&weather=snow&heading=0`, gates: { notBlack: true } },
@@ -82,11 +82,13 @@ for (const sc of SCENES) {
     if (stats?.mode && stats.mode !== 'loading' && playable === null) playable = (Date.now() - t0) / 1000
     if (playable !== null && stats?.settled) break
   }
-  // Let the crowd and traffic fill in (game time runs slowly on a software GPU).
-  for (let i = 0; i < 40; i++) {
+  // Let the crowd and traffic fill in. Wait on game time: on a software GPU
+  // it runs ~50-100x slower than the clock.
+  const g0 = stats?.gameTime ?? 0
+  for (let i = 0; i < 160; i++) {
     await page.waitForTimeout(3000)
     stats = await page.evaluate(() => window.nihon.stats()).catch(() => stats)
-    if (stats && stats.cars >= stats.carTarget * 0.9 && stats.peds >= stats.pedTarget * 0.9) break
+    if (stats && stats.gameTime - g0 > 12 && stats.cars >= stats.carTarget * 0.9 && stats.peds >= stats.pedTarget * 0.6) break
   }
   const budget = await page.evaluate(() => window.nihon.budget()).catch(() => null)
   const file = `${out}/${sc.name}.png`

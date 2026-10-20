@@ -57,13 +57,21 @@ export class ModelLibrary {
  * material; wheels (wheel_*) stay separate so they can spin.
  */
 function mergeStatic(root: Object3D): void {
+  // Each wheel is merged on its own (it spins as one); everything else together.
+  const wheelOf = (o: Object3D | null): Object3D | null => (!o ? null : /^wheel_/i.test(o.name) ? o : wheelOf(o.parent))
+  const wheels: Object3D[] = []
+  root.traverse((o) => /^wheel_/i.test(o.name) && wheels.push(o))
+  for (const w of wheels) mergeInto(w)
+  mergeInto(root, (m) => wheelOf(m) === null)
+}
+
+function mergeInto(root: Object3D, accept: (m: Mesh) => boolean = () => true): void {
   root.updateMatrixWorld(true)
   const inv = new Matrix4().copy(root.matrixWorld).invert()
   const groups = new Map<Material, { geos: BufferGeometry[]; meshes: Mesh[] }>()
-  const moving = (o: Object3D | null): boolean => !!o && (/^wheel_/i.test(o.name) || moving(o.parent))
   root.traverse((o) => {
     const m = o as Mesh
-    if (!m.isMesh || Array.isArray(m.material) || moving(m)) return
+    if (o === root || !m.isMesh || Array.isArray(m.material) || !accept(m)) return
     const g = m.geometry.clone().applyMatrix4(new Matrix4().multiplyMatrices(inv, m.matrixWorld))
     for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k)
     if (!g.attributes.normal) g.computeVertexNormals()

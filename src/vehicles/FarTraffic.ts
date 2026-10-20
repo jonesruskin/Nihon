@@ -99,6 +99,7 @@ export class FarTraffic {
   end(): void {
     for (const b of this.buckets.values()) {
       b.body.count = b.lights.count = b.n
+      b.body.visible = b.lights.visible = b.n > 0
       if (!b.n) continue
       b.body.instanceMatrix.needsUpdate = b.lights.instanceMatrix.needsUpdate = true
       if (b.body.instanceColor) b.body.instanceColor.needsUpdate = true

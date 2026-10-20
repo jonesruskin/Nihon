@@ -33,10 +33,12 @@ export class Player {
   readonly radius = 0.28
   readonly halfHeight = 0.58
   private airTime = 0
-  // Average Japanese walking pace in cities is fast: ~1.4–1.6 m/s.
-  walkSpeed = 1.45
-  runSpeed = 3.6
-  sprintSpeed = 6.2
+  // A brisk city pace (Tokyo commuters walk ~1.5-1.7 m/s); a game needs to
+  // cover a street in seconds, and the stride-driven animation keeps the
+  // feet planted at any speed. Shift runs, Shift+X sprints.
+  walkSpeed = 1.75
+  runSpeed = 4.6
+  sprintSpeed = 6.8
 
   constructor(private physics: Physics) {}
 

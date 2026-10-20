@@ -51,7 +51,9 @@ import {
 const SHOP_CLASSES = new Set(['shop', 'grocery', 'convenience', 'restaurant', 'fast_food', 'cafe', 'bar', 'beer', 'clothing_store', 'bakery', 'pharmacy', 'alcohol_shop', 'ice_cream', 'hairdresser', 'laundry', 'mobile_phone', 'books', 'bank', 'karaoke', 'cinema', 'theatre', 'entertainment', 'pub', 'nightclub'])
 
 /** Max draw distance (m) per prop type. */
-const PROP_RANGE: Record<string, number> = { pole: 450, light: 600, vending: 220, signal: 500, pillar: 3000, tree: 900, wires: 350, mast: 550, ac: 260, tank: 700, antenna: 320 }
+const PROP_RANGE: Record<string, number> = { pole: 450, light: 550, vending: 200, signal: 450, pillar: 1800, tree: 600, wires: 350, mast: 500, ac: 240, tank: 600, antenna: 300 }
+/** Bucket size (m) per prop type: long-range types get bigger buckets (fewer draw calls). */
+const PROP_CELL: Record<string, number> = { tree: 2400, pillar: 2400, tank: 2400, mast: 1200, light: 800, signal: 800 }
 
 const TILE_URL = (t: TileId) => `https://tiles.openfreemap.org/planet/20261011_080001_pt/${t.z}/${t.x}/${t.y}.pbf`
 const Z = 14
@@ -329,10 +331,10 @@ export class VectorManager {
     const up = new Vector3(0, 1, 0)
     const pos = new Vector3()
     const scl = new Vector3()
-    // Instances are bucketed into ~400 m cells so each bucket can be frustum-
-    // and distance-culled on its own (thousands of poles per Tokyo tile).
-    const CELL = 400
+    // Instances are bucketed into cells so each bucket can be frustum- and
+    // distance-culled on its own (thousands of poles per Tokyo tile).
     const instance = (kind: string, model: PropModel, data: Float32Array, filter: (extra: number) => boolean, scale: (s: number, e: number) => Vector3) => {
+      const CELL = PROP_CELL[kind] ?? 400
       const buckets = new Map<string, number[]>()
       for (let i = 0; i < data.length; i += 6) {
         if (!filter(data[i + 5])) continue

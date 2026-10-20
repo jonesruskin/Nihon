@@ -38,7 +38,7 @@ export class VehicleManager {
   current: Vehicle | null = null
   private spawnTimer = 0
   private usedSpots = new Set<string>()
-  maxParked = 16
+  maxParked = 10
 
   constructor(
     private physics: Physics,
@@ -52,9 +52,14 @@ export class VehicleManager {
     this.spawnTimer += dt
     if (this.spawnTimer < 1.5 || !this.physics.ready) return
     this.spawnTimer = 0
-    // Despawn far, unoccupied vehicles.
+    // Despawn far, unoccupied vehicles; shadows only close by.
     for (let i = this.vehicles.length - 1; i >= 0; i--) {
       const v = this.vehicles[i]
+      const cast = v === this.current || v.position.distanceTo(center) < 45
+      if (v.object.userData.cast !== cast) {
+        v.object.userData.cast = cast
+        v.object.traverse((o) => ((o as Mesh).isMesh ? ((o as Mesh).castShadow = cast) : 0))
+      }
       if (v === this.current) continue
       if (v.position.distanceTo(center) > 380) {
         v.dispose()
@@ -76,7 +81,7 @@ export class VehicleManager {
           const b = new Vector3(pts[i + 3], pts[i + 4], pts[i + 5]).applyMatrix4(m)
           const mid = new Vector3(pts[i], pts[i + 1], pts[i + 2]).applyMatrix4(m)
           const d = mid.distanceTo(center)
-          if (d < 25 || d > 160) continue
+          if (d < 25 || d > 120) continue
           const dir = b.clone().sub(a).setY(0).normalize()
           const key = `${t.key}:${path.name}:${i}:${Math.round(mid.x)}:${Math.round(mid.z)}`
           if (this.usedSpots.has(key)) continue

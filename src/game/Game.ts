@@ -541,8 +541,8 @@ export class Game {
     this.weather.budget = { low: 3000, medium: 6000, high: 10000, ultra: 16000 }[q]
     const t = {
       low: { far: 30_000, split: 1.3, near: 800, vfar: 1300, err: 48, pr: 500 },
-      medium: { far: 60_000, split: 1.5, near: 1200, vfar: 2000, err: 32, pr: 800 },
-      high: { far: 90_000, split: 1.45, near: 1500, vfar: 2600, err: 24, pr: 1100 },
+      medium: { far: 45_000, split: 1.4, near: 1200, vfar: 2000, err: 32, pr: 800 },
+      high: { far: 70_000, split: 1.45, near: 1500, vfar: 2600, err: 24, pr: 1100 },
       ultra: { far: 120_000, split: 1.8, near: 1800, vfar: 3200, err: 16, pr: 1600 },
     }[q]
     this.traffic.cap = { low: 50, medium: 90, high: 140, ultra: 180 }[q]
@@ -1777,9 +1777,22 @@ export class Game {
       requestAnimationFrame(() => {
         r.info.autoReset = false
         r.info.reset()
+        // Attribute every draw call of the next frame to what issued it.
+        const by: Record<string, number> = {}
+        const orig = r.renderBufferDirect
+        r.renderBufferDirect = function (cam, scene, geo, mat, obj, group) {
+          let top: Object3D = obj
+          while (top.parent && top.parent.type !== 'Scene') top = top.parent
+          const pass = (mat as { isMeshDepthMaterial?: boolean }).isMeshDepthMaterial || (mat as { isMeshDistanceMaterial?: boolean }).isMeshDistanceMaterial ? 'shadow' : obj.type === 'Mesh' && !top.parent ? 'post' : 'main'
+          const k = `${pass}:${top.name || top.type}/${obj.name.replace(/[:\d].*$/, '') || obj.type}`
+          by[k] = (by[k] ?? 0) + 1
+          return orig.call(this, cam, scene, geo, mat, obj, group)
+        }
         requestAnimationFrame(() => {
+          r.renderBufferDirect = orig
           const { calls, triangles, lines } = r.info.render
           r.info.autoReset = true
+          const top = Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 24).map(([k, v]) => `${v} ${k}`).join(', ')
           let lights = 0
           let casters = 0
           let casterTris = 0
@@ -1793,7 +1806,7 @@ export class Game {
               casterTris += n * ((m as InstancedMesh).isInstancedMesh ? (m as InstancedMesh).count : 1)
             }
           })
-          done({ calls, triangles, lines, programs: r.info.programs?.length ?? 0, textures: r.info.memory.textures, lights, casters, casterTris: Math.round(casterTris), quality: this.params.quality, scale: this.governor.scale, lamps: lampUniforms.uLampCount.value })
+          done({ calls, triangles, lines, programs: r.info.programs?.length ?? 0, textures: r.info.memory.textures, lights, casters, casterTris: Math.round(casterTris), quality: this.params.quality, scale: this.governor.scale, lamps: lampUniforms.uLampCount.value, top })
         })
       })
     })
@@ -1829,6 +1842,7 @@ export class Game {
   stats(): Record<string, number | string> {
     return {
       fps: Math.round(this.fps),
+      gameTime: Math.round(this.elapsed * 10) / 10,
       cpuMs: Math.round(this.cpuFrame * 10) / 10,
       cpuRenderMs: Math.round(this.cpuRender * 10) / 10,
       cpuPeakMs: Math.round(this.cpuPeak * 10) / 10,

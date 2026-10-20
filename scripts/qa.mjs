@@ -20,7 +20,7 @@ const SCENES = [
   { name: 'shibuya-night', q: `${T('10-16', '21:30:00')}&weather=clear&heading=200`, gates: { night: true, cars: 12 } },
   { name: 'shibuya-dusk', q: `${T('10-16', '17:25:00')}&weather=clear&heading=260`, gates: { notBlack: true } },
   { name: 'shibuya-rain', q: `${T('10-16', '15:00:00')}&weather=rain&heading=120`, gates: { notBlack: true } },
-  { name: 'shinjuku-day', q: `lat=35.6909&lon=139.7003&${T('10-16', '12:00:00')}&weather=clear&heading=0`, gates: { cars: 10 } },
+  { name: 'shinjuku-day', q: `lat=35.6938&lon=139.7036&${T('10-16', '12:00:00')}&weather=clear&heading=0`, gates: { cars: 10 } },
   { name: 'residential-day', q: `lat=35.7262&lon=139.7672&${T('10-16', '10:00:00')}&weather=clear&heading=90`, gates: {} },
   { name: 'residential-night', q: `lat=35.7262&lon=139.7672&${T('10-16', '21:30:00')}&weather=clear&heading=90`, gates: { night: true } },
   { name: 'gion-night', q: `lat=35.0037&lon=135.7752&${T('10-16', '20:30:00')}&weather=clear&heading=90`, gates: { night: true } },

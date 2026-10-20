@@ -51,7 +51,7 @@ import {
 const SHOP_CLASSES = new Set(['shop', 'grocery', 'convenience', 'restaurant', 'fast_food', 'cafe', 'bar', 'beer', 'clothing_store', 'bakery', 'pharmacy', 'alcohol_shop', 'ice_cream', 'hairdresser', 'laundry', 'mobile_phone', 'books', 'bank', 'karaoke', 'cinema', 'theatre', 'entertainment', 'pub', 'nightclub'])
 
 /** Max draw distance (m) per prop type. */
-const PROP_RANGE: Record<string, number> = { pole: 450, light: 550, vending: 200, signal: 450, pillar: 1800, tree: 600, wires: 350, mast: 500, ac: 240, tank: 600, antenna: 300 }
+const PROP_RANGE: Record<string, number> = { pole: 420, light: 550, vending: 200, signal: 380, pillar: 1800, tree: 520, wires: 350, mast: 500, ac: 240, tank: 600, antenna: 300 }
 /** Bucket size (m) per prop type: long-range types get bigger buckets (fewer draw calls). */
 const PROP_CELL: Record<string, number> = { tree: 2400, pillar: 2400, tank: 2400, mast: 1200, light: 800, signal: 800 }
 

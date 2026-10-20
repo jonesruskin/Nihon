@@ -64,10 +64,16 @@ export class VehicleManager {
       const near = v === this.current || !v.parked || d < 40
       v.object.visible = near
       if (!near) this.far.add(v.spec.id, v.object.position, _fwd.set(0, 0, -1).applyQuaternion(v.object.quaternion), v.model.color)
-      const cast = v === this.current || d < 45
+      const cast = v === this.current || d < 30
       if (v.object.userData.cast !== cast) {
         v.object.userData.cast = cast
-        v.object.traverse((o) => ((o as Mesh).isMesh ? ((o as Mesh).castShadow = cast) : 0))
+        v.object.traverse((o) => {
+          const m = o as Mesh
+          if (!m.isMesh) return
+          let wheel = false
+          for (let p: typeof o | null = o; p && !wheel; p = p.parent) wheel = /^wheel_/i.test(p.name)
+          m.castShadow = cast && !wheel
+        })
       }
       if (v === this.current) continue
       if (v.position.distanceTo(center) > 380) {

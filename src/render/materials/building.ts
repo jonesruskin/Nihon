@@ -308,7 +308,7 @@ FacadeSample facade() {
     albedo = mix(albedo, signFace, sign);
     rough = mix(rough, 0.4, sign);
     // Lit signs are the brightest things on a Japanese street at night.
-    emis += signFace * sign * mix(0.06, 1.6, uNight);
+    emis += signFace * sign * mix(0.06, 0.85, uNight);
   }
 
   // Temples & shrines: dark timber, white plaster panels, no glass.
@@ -409,7 +409,7 @@ FacadeSample facade() {
     vec3 fc = hueF < 0.3 ? vec3(0.92, 0.92, 0.9) : hueF < 0.5 ? vec3(0.75, 0.12, 0.1) : hueF < 0.65 ? vec3(0.1, 0.32, 0.62) : hueF < 0.8 ? vec3(0.95, 0.72, 0.15) : vec3(0.15, 0.45, 0.25);
     albedo = mix(albedo, fc, fascia);
     rough = mix(rough, 0.45, fascia);
-    emis += fc * fascia * uNight * 1.1;
+    emis += fc * fascia * uNight * 0.22;
   }
   // Contact shading: walls darken toward the street where sky light is
   // blocked by the ground, kerb and neighbours (cheap baked AO).
@@ -451,7 +451,7 @@ FacadeSample facade() {
     if (shop) {
       float open = step(0.2, bhash1(s * 61.0 + bx * 0.13));
       vec3 shopC = mix(vec3(1.0, 0.86, 0.66), vec3(0.92, 0.97, 1.0), step(0.55, bhash1(s * 67.0)));
-      emis += shopC * isWin * open * mix(0.9, 2.6, bhash1(s * 71.0 + bx)) * uNight * (1.0 - far * 0.6);
+      emis += shopC * isWin * open * mix(0.16, 0.42, bhash1(s * 71.0 + bx)) * (0.45 + 0.75 * roomLit) * uNight * (1.0 - far * 0.6);
     }
     // Lantern-lit lattices and shoji in old towns.
     emis += vec3(1.0, 0.62, 0.3) * lattice * 0.05 * uNight * step(0.3, bhash1(s * 41.0));

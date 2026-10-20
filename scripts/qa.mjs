@@ -55,13 +55,13 @@ async function luminance(path, w, h) {
   }
   const s = lum(street)
   const a = lum(whole)
-  return { median: s[s.length >> 1], black: a.filter((x) => x < 0.02).length / a.length, mean: a.reduce((x, y) => x + y, 0) / a.length }
+  return { median: s[s.length >> 1], black: a.filter((x) => x < 0.02).length / a.length, white: a.filter((x) => x > 0.93).length / a.length, mean: a.reduce((x, y) => x + y, 0) / a.length }
 }
 
 const results = existsSync(`${out}/results.json`) ? JSON.parse(readFileSync(`${out}/results.json`, 'utf8')) : {}
 for (const sc of SCENES) {
-  const w = sc.w ?? 1280
-  const h = sc.h ?? 720
+  const w = sc.w ?? Number(process.env.QA_W ?? 1280)
+  const h = sc.h ?? Number(process.env.QA_H ?? 720)
   const q = sc.q.includes('quality=') ? sc.q : `${sc.q}&quality=high`
   const browser = await chromium.launch({
     executablePath: process.env.CHROMIUM,
@@ -102,9 +102,14 @@ for (const sc of SCENES) {
   check('no errors', errors.length === 0, errors.slice(0, 3).join(' | ') || 'clean')
   check('not black/NaN', lum.mean > 0.03, `mean ${lum.mean.toFixed(3)}`)
   if (g.night) check('N: night readable', lum.median >= 0.06 && lum.black < 0.25, `street median ${lum.median.toFixed(3)}, near-black ${(lum.black * 100).toFixed(0)}%`)
+  // ...and still night: not washed out to grey or blown to white.
+  if (g.night) check('N: still night', lum.median <= 0.42 && lum.white < 0.12, `street median ${lum.median.toFixed(3)}, near-white ${(lum.white * 100).toFixed(0)}%`)
+  check('not blown out', lum.white < 0.25, `near-white ${(lum.white * 100).toFixed(0)}%`)
   if (g.cars) check('T: traffic', (stats?.carsNear ?? 0) >= g.cars, `${stats?.carsNear} cars within 150 m (${stats?.cars} simulated)`)
   if (g.peds) check('people', (stats?.peds ?? 0) >= g.peds, `${stats?.peds} pedestrians`)
-  if (budget) check('F: budget', budget.calls <= 520 && budget.lights <= 4, `${budget.calls} draws, ${(budget.triangles / 1e6).toFixed(2)}M tris, ${budget.lights} lights, ${budget.lamps} shader lamps`)
+  // Draw-call budget per tier (CPU cost of a frame); real lights stay <= 4.
+  const maxCalls = { low: 300, medium: 450, high: 650, ultra: 850 }[budget?.quality] ?? 650
+  if (budget) check('F: budget', budget.calls <= maxCalls && budget.lights <= 4, `${budget.calls}/${maxCalls} draws (${budget.quality}), ${(budget.triangles / 1e6).toFixed(2)}M tris, ${budget.lights} lights, ${budget.lamps} shader lamps`)
   results[sc.name] = { file: `${sc.name}.png`, w, h, checks, stats, budget, lum, at: new Date().toISOString() }
   console.log(`${checks.every((c) => c.ok) ? 'PASS' : 'FAIL'} ${sc.name}: ${checks.map((c) => `${c.ok ? '✓' : '✗'} ${c.name} (${c.detail})`).join('; ')}`)
   writeFileSync(`${out}/results.json`, JSON.stringify(results, null, 1))

@@ -63,7 +63,7 @@ const PER_KM: Record<string, number> = { motorway: 30, trunk: 26, primary: 22, s
 const NEAR = 100
 const MAX_NEAR = 24
 /** Simulated traffic disc around the player (m). */
-const RADIUS = 240
+const RADIUS = 210
 
 const MIX: Array<[string, number]> = [
   ['kei_car', 0.28],
@@ -198,9 +198,11 @@ export class Traffic {
         const mid = l.pts[Math.floor(l.pts.length / 2)]
         const d = mid.distanceTo(center)
         if (d > RADIUS) continue
-        const w = (PER_KM[l.cls] ?? 2) * l.lanes * (l.length / 1000)
-        if (w <= 0) continue
-        km += w
+        const real = (PER_KM[l.cls] ?? 2) * l.lanes * (l.length / 1000)
+        if (real <= 0) continue
+        km += real
+        // Denser toward the player, where it's seen; thinner at the edge.
+        const w = real * (1.5 - d / RADIUS)
         this.ring.push(l)
         this.ringTotal += w
         this.ringWeights.push(this.ringTotal)

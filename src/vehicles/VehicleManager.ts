@@ -6,7 +6,9 @@ import type { Physics } from '../physics/Physics'
 import type { VectorManager } from '../world/vector/VectorManager'
 import { Vehicle, type DriveInput } from './Vehicle'
 import { specById, vehicleFromScene, type CarSpec } from './carGeometry'
-import { lampGeometry, lampMaterial } from './FarTraffic'
+import { FarTraffic, lampGeometry, lampMaterial } from './FarTraffic'
+
+const _fwd = new Vector3()
 import { modelLibrary } from '../world/props/ModelLibrary'
 import type { Input } from '../player/Input'
 
@@ -39,6 +41,7 @@ export class VehicleManager {
   private spawnTimer = 0
   private usedSpots = new Set<string>()
   maxParked = 10
+  private far = new FarTraffic(this.root, 24)
 
   constructor(
     private physics: Physics,
@@ -52,10 +55,16 @@ export class VehicleManager {
     this.spawnTimer += dt
     if (this.spawnTimer < 1.5 || !this.physics.ready) return
     this.spawnTimer = 0
-    // Despawn far, unoccupied vehicles; shadows only close by.
+    // Despawn far, unoccupied vehicles. Parked cars beyond ~40 m are drawn as
+    // instanced bodies (a scanned car is a dozen draw calls); shadows only close by.
+    this.far.begin()
     for (let i = this.vehicles.length - 1; i >= 0; i--) {
       const v = this.vehicles[i]
-      const cast = v === this.current || v.position.distanceTo(center) < 45
+      const d = v.position.distanceTo(center)
+      const near = v === this.current || !v.parked || d < 40
+      v.object.visible = near
+      if (!near) this.far.add(v.spec.id, v.object.position, _fwd.set(0, 0, -1).applyQuaternion(v.object.quaternion), v.model.color)
+      const cast = v === this.current || d < 45
       if (v.object.userData.cast !== cast) {
         v.object.userData.cast = cast
         v.object.traverse((o) => ((o as Mesh).isMesh ? ((o as Mesh).castShadow = cast) : 0))
@@ -66,6 +75,7 @@ export class VehicleManager {
         this.vehicles.splice(i, 1)
       }
     }
+    this.far.end()
     if (this.vehicles.length + this.pending >= this.maxParked) return
     const candidates: Array<{ p: Vector3; yaw: number; key: string; width: number }> = []
     for (const t of this.vector.readyTiles) {

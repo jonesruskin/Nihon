@@ -54,7 +54,9 @@ for (int li = 0; li < ${MAX_LAMPS}; li++) {
   lampLight.direction = lv / ld;
   // Inverse square with a smooth window to zero at the range.
   float win = clamp(1.0 - pow(ld / range, 4.0), 0.0, 1.0);
-  float att = win * win / max(d2, 0.25);
+  // Never brighter than at ~1.5 m: lamps are up on poles, and surfaces right
+  // beside one would otherwise burn white.
+  float att = win * win / max(d2, 2.25);
   vec4 lampC = texelFetch(uLampTex, ivec2(li * 3 + 1, 0), 0);
   vec4 lampD = texelFetch(uLampTex, ivec2(li * 3 + 2, 0), 0);
   float cone = lampC.w < -1.5 ? 1.0 : smoothstep(lampC.w, lampD.w, dot(-lampLight.direction, lampD.xyz));

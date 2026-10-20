@@ -299,17 +299,19 @@ export function createStreetLightModel(): PropModel {
     colored(at(new CylinderGeometry(0.05, 0.05, 2.2, 6), 0, 8.0, 1.0, Math.PI / 2 - 0.15, 0, 0), 0x8a8d90),
     colored(at(new BoxGeometry(0.35, 0.12, 0.7), 0, 8.15, 2.05), 0x6a6d70),
   ]
-  const lamp = colored(at(new BoxGeometry(0.3, 0.03, 0.6), 0, 8.08, 2.05), 0xffffff, 1)
-  parts.push(lamp)
-  const lampMat = new MeshStandardMaterial({ color: 0xf2efe6, emissive: 0xffe2b0, emissiveIntensity: 0, roughness: 0.4 })
-  lampMat.name = 'lamp'
-  lampMat.onBeforeCompile = (s) => {
+  // The lens is the only pure-white part: one material for the whole lamp
+  // (one draw call per bucket), glowing where the vertex colour is white.
+  parts.push(colored(at(new BoxGeometry(0.3, 0.03, 0.6), 0, 8.08, 2.05), 0xffffff))
+  const mat = vc({ roughness: 0.5, metalness: 0.6 })
+  mat.name = 'streetlight'
+  mat.onBeforeCompile = (s) => {
     s.uniforms.uNight = buildingUniforms.uNight
     s.fragmentShader = s.fragmentShader
       .replace('#include <common>', '#include <common>\nuniform float uNight;')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance = vec3(1.0, 0.93, 0.84) * 6.0 * uNight;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += step(2.97, vColor.r + vColor.g + vColor.b) * vec3(1.0, 0.93, 0.84) * 6.0 * uNight;')
   }
-  return { geometry: assemble(parts), materials: [vc({ roughness: 0.5, metalness: 0.6 }), lampMat], castShadow: true }
+  mat.customProgramCacheKey = () => 'nihon-streetlight'
+  return { geometry: assemble(parts), materials: [mat], castShadow: true }
 }
 
 function vendingFront(): CanvasTexture {

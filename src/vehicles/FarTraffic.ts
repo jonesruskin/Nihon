@@ -79,10 +79,11 @@ export class FarTraffic {
   ) {}
 
   /** Start a frame: every bucket empty. */
-  begin(night: number): void {
+  /** Start a frame: every bucket empty. `night` (if given) sets lamp brightness for all vehicles. */
+  begin(night?: number): void {
     for (const b of this.buckets.values()) b.n = 0
     // Off by day (just dull lenses), bright enough to bloom after dark.
-    this.lampMat.color.setScalar(0.25 + night * 5.5)
+    if (night !== undefined) this.lampMat.color.setScalar(0.25 + night * 5.5)
   }
 
   add(specId: string, pos: Vector3, tan: Vector3, color: number): void {

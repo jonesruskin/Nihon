@@ -211,7 +211,7 @@ export class RenderPipeline {
     this.aerial = new AerialPerspectiveEffect(this.camera, { sky: true, sun: true, moon: true })
     this.linkCloudBuffers()
 
-    this.bloom = new BloomEffect({ intensity: 0.6, luminanceThreshold: 0.92, luminanceSmoothing: 0.25, mipmapBlur: true })
+    this.bloom = new BloomEffect({ intensity: 0.5, luminanceThreshold: 1.6, luminanceSmoothing: 0.4, mipmapBlur: true, radius: 0.7 })
     this.toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.AGX })
     const debug = new URLSearchParams(location.search)
     if (!debug.has('noclouds')) this.composer.addPass(new EffectPass(this.camera, this.clouds))
@@ -436,9 +436,11 @@ export class RenderPipeline {
     this.exposure = this.snapExposure ? want : this.exposure + (want - this.exposure) * Math.min(1, dt * 0.8)
     this.snapExposure = false
     this.sanitize.uniforms.get('uExposure')!.value = this.exposure
-    // Bloom sees exposed radiance: only what would clip blooms.
-    this.bloom.luminanceMaterial.threshold = 0.9
-    this.bloom.intensity = 0.55 + 0.1 * this.night
+    // Bloom sees exposed radiance: only light sources well past white bloom
+    // (lamps, headlights, sign highlights), not every lit shop window, which
+    // up close would fog the whole frame.
+    this.bloom.luminanceMaterial.threshold = 1.6
+    this.bloom.intensity = 0.5 - 0.12 * this.night
     this.renderer.toneMappingExposure = this.exposure
     // Shade in a sunny street gets ~20% of direct light from sky and bounce.
     const sunUp = Math.max(0, Math.min(1, (el + 1) / 14))

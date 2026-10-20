@@ -1,7 +1,9 @@
 // NIHON game orchestrator: boots the world at a real place in Japan, streams
 // it in around the player, and runs the frame loop.
 import { initGltf } from '../core/gltf'
-import { BufferAttribute, BufferGeometry, LineBasicMaterial, LineSegments, Raycaster, Vector3, type Mesh } from 'three'
+import { lampUniforms } from '../render/lamps'
+import { deviceTier, FrameGovernor, TIERS } from '../render/FrameGovernor'
+import { BufferAttribute, BufferGeometry, Frustum, LineBasicMaterial, LineSegments, Matrix4, Raycaster, Sphere, Vector3, type InstancedMesh, type Light, type Mesh, type Object3D } from 'three'
 import { WorldFrame } from '../core/frame'
 import { GameClock, fromJst, jstParts } from '../core/clock'
 import { pendingRequests } from '../core/net'
@@ -89,7 +91,7 @@ function readParams(): StartParams {
     heading: num('heading', 300),
     pitch: num('pitch', -5),
     altitude,
-    quality: (q.get('quality') as QualityTier) ?? 'high',
+    quality: (q.get('quality') as QualityTier | null) ?? 'high',
     mode: q.get('mode') === 'fly' || altitude > 3 ? 'fly' : 'onfoot',
     character: q.get('char') ?? 'player_m',
   }
@@ -140,10 +142,14 @@ export class Game {
   readonly nearPeople: NearPeople
   readonly address = new AddressLookup()
   private currentPref = 0
-  private autoQualityTimer = 0
-  private autoQualityDrops = 0
   private bench = new URLSearchParams(location.search).has('bench') ? new Bench() : null
   private benchSpin = false
+  private governor: FrameGovernor
+  private gpuName = ''
+  /** Main-thread ms per frame (smoothed), of which submitting the render; decaying peak. */
+  private cpuFrame = 0
+  private cpuRender = 0
+  private cpuPeak = 0
   private explicitQuality = new URLSearchParams(location.search).has('quality') || this.bench !== null
   private placedTimer = 0
   private nearSpot: Spot | null = null
@@ -192,6 +198,11 @@ export class Game {
     this.nearPeople = new NearPeople(this.characters)
     this.pipeline = new RenderPipeline(canvas, this.world)
     initGltf(this.pipeline.renderer)
+    // Start at the tier this device can hold at full frame rate.
+    const device = deviceTier(this.pipeline.renderer.getContext())
+    this.gpuName = device.gpu
+    if (!this.explicitQuality) this.params.quality = device.tier
+    this.governor = new FrameGovernor(this.explicitQuality ? this.params.quality : device.ceiling)
     this.terrain = new TerrainManager(this.world)
     this.plateau = new PlateauManager(this.world, this.pipeline.camera, this.pipeline.renderer)
     this.vector = new VectorManager(this.world, this.terrain, this.plateau)
@@ -397,11 +408,11 @@ export class Game {
     this.vector.onTile = ({ build, group }) => {
       const key = `v:${build.id.z}/${build.id.x}/${build.id.y}`
       this.colliders.removePrefix(key + ':')
-      for (const child of group.children) {
+      group.children.forEach((child, i) => {
         const m = child as Mesh
-        if (!m.isMesh || (m as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) continue
-        if (['buildings', 'roads', 'structures', 'roofs'].includes(m.name)) this.colliders.addMesh(`${key}:${m.name}`, m)
-      }
+        if (!m.isMesh || (m as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) return
+        if (['buildings', 'roads', 'structures', 'roofs'].includes(m.name)) this.colliders.addMesh(`${key}:${m.name}:${i}`, m)
+      })
       const cyl: Array<[number, number, number, number, number]> = []
       const I = build.instances
       for (let i = 0; i < I.pole.length; i += 6) cyl.push([I.pole[i], I.pole[i + 1], I.pole[i + 2], 6, 0.2])
@@ -508,9 +519,7 @@ export class Game {
       this.benchSpin = false
     }
     r.info.autoReset = true
-    const gl = r.getContext()
-    const ext = gl.getExtension('WEBGL_debug_renderer_info')
-    const gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'GPU unknown'
+    const gpu = this.gpuName || 'GPU unknown'
     const panel = document.createElement('div')
     panel.className = 'bench'
     panel.innerHTML = b.html(this.params.quality, gpu)
@@ -531,8 +540,8 @@ export class Game {
     const t = {
       low: { far: 30_000, split: 1.3, near: 800, vfar: 1300, err: 48, pr: 500 },
       medium: { far: 60_000, split: 1.5, near: 1200, vfar: 2000, err: 32, pr: 800 },
-      high: { far: 90_000, split: 1.6, near: 1500, vfar: 2600, err: 24, pr: 1100 },
-      ultra: { far: 120_000, split: 2.0, near: 1800, vfar: 3200, err: 16, pr: 1600 },
+      high: { far: 90_000, split: 1.45, near: 1500, vfar: 2600, err: 24, pr: 1100 },
+      ultra: { far: 120_000, split: 1.8, near: 1800, vfar: 3200, err: 16, pr: 1600 },
     }[q]
     this.plateau.radius = t.pr
     this.plateau.errorTarget = t.err
@@ -914,6 +923,7 @@ export class Game {
 
   private frame = (t: number): void => {
     requestAnimationFrame(this.frame)
+    const cpu0 = performance.now()
     const realDt = (t - this.last) / 1000
     const dt = Math.min(0.1, realDt)
     this.last = t
@@ -1110,19 +1120,16 @@ export class Game {
     updateWater(this.elapsed)
     buildingUniforms.uNight.value = night
     buildingUniforms.uTime.value = this.elapsed
-    // Adaptive quality: step down if the machine can't keep up.
-    if (!this.explicitQuality && this.mode !== 'loading' && this.elapsed > 20) {
-      this.autoQualityTimer += realDt
-      if (this.autoQualityTimer > 6) {
-        this.autoQualityTimer = 0
-        const order = ['low', 'medium', 'high', 'ultra'] as const
-        const i = order.indexOf(this.params.quality)
-        if (this.fps > 0 && this.fps < 22 && i > 0 && this.autoQualityDrops < 2) {
-          this.autoQualityDrops++
-          this.params.quality = order[i - 1]
-          this.applyQuality(this.params.quality)
-          this.hud.toast(`Graphics lowered to <b>${this.params.quality}</b> for smoother play (<kbd>Tab</kbd> → 設定 to change).`, 5000)
-        }
+    // Dynamic resolution, then quality tier, to hold the display's refresh
+    // rate (90 FPS on fast screens). An explicit ?quality= pins the tier.
+    if (this.mode !== 'loading' && !this.hud.veiled && this.elapsed > 4 && !this.bench) {
+      const step = this.governor.sample(realDt, this.params.quality)
+      if (step?.scale !== undefined) this.pipeline.setRenderScale(step.scale)
+      if (step?.tier && !this.explicitQuality) {
+        const down = TIERS.indexOf(step.tier) < TIERS.indexOf(this.params.quality)
+        this.params.quality = step.tier
+        this.applyQuality(step.tier)
+        if (down) this.hud.toast(`Graphics set to <b>${step.tier}</b> to keep the frame rate up (<kbd>Tab</kbd> → 設定 to change).`, 5000)
       }
     }
     this.placedTimer -= dt
@@ -1143,8 +1150,13 @@ export class Game {
     // from streaming it (warm-up frames compile shaders before the reveal).
     if (!this.hud.veiled || this.warmFrames > 0) {
       if (this.warmFrames > 0) this.warmFrames--
+      const r0 = performance.now()
       this.pipeline.render(dt)
+      this.cpuRender += (performance.now() - r0 - this.cpuRender) * 0.05
     }
+    const used = performance.now() - cpu0
+    this.cpuFrame += (used - this.cpuFrame) * 0.05
+    this.cpuPeak = Math.max(this.cpuPeak * 0.995, used)
     if (this.bench) {
       const info = this.pipeline.renderer.info
       this.bench.sample(realDt, info.render.calls, info.render.triangles)
@@ -1219,6 +1231,9 @@ export class Game {
     const a = document.createElement('a')
     const j = this.clock.jst
     a.download = `nihon-${j.year}${String(j.month).padStart(2, '0')}${String(j.day).padStart(2, '0')}-${String(j.hour).padStart(2, '0')}${String(j.minute).padStart(2, '0')}.png`
+    // The drawing buffer isn't preserved between frames (faster on most
+    // GPUs): draw one now and read it back in the same task.
+    this.pipeline.render(0)
     a.href = c.toDataURL('image/png')
     a.click()
     const f = document.createElement('div')
@@ -1736,10 +1751,68 @@ export class Game {
     })
   }
 
+  /** QA: what one frame costs (gate F budgets), measured over the next frame. */
+  budget(): Promise<Record<string, number | string>> {
+    const r = this.pipeline.renderer
+    return new Promise((done) => {
+      requestAnimationFrame(() => {
+        r.info.autoReset = false
+        r.info.reset()
+        requestAnimationFrame(() => {
+          const { calls, triangles, lines } = r.info.render
+          r.info.autoReset = true
+          let lights = 0
+          let casters = 0
+          let casterTris = 0
+          this.pipeline.scene.traverseVisible((o) => {
+            if ((o as Light).isLight && (o as Light).intensity > 0) lights++
+            const m = o as Mesh
+            if (m.isMesh && m.castShadow) {
+              casters++
+              const g = m.geometry
+              const n = (g.index ? g.index.count : g.attributes.position.count) / 3
+              casterTris += n * ((m as InstancedMesh).isInstancedMesh ? (m as InstancedMesh).count : 1)
+            }
+          })
+          done({ calls, triangles, lines, programs: r.info.programs?.length ?? 0, textures: r.info.memory.textures, lights, casters, casterTris: Math.round(casterTris), quality: this.params.quality, scale: this.governor.scale, lamps: lampUniforms.uLampCount.value })
+        })
+      })
+    })
+  }
+
+  /** QA: draws and triangles the main view would submit, by kind (frustum-tested). */
+  debugDraws(): Record<string, string> {
+    const cam = this.pipeline.camera
+    cam.updateMatrixWorld()
+    const fr = new Frustum().setFromProjectionMatrix(new Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse))
+    const out: Record<string, [number, number]> = {}
+    const sphere = new Sphere()
+    this.pipeline.scene.traverseVisible((o) => {
+      const m = o as Mesh
+      if (!m.isMesh) return
+      if (m.frustumCulled !== false) {
+        const bs = (m as unknown as { boundingSphere?: Sphere | null }).boundingSphere ?? (m.geometry.boundingSphere || (m.geometry.computeBoundingSphere(), m.geometry.boundingSphere))
+        if (bs && !fr.intersectsSphere(sphere.copy(bs).applyMatrix4(m.matrixWorld))) return
+      }
+      const g = m.geometry
+      const tris = ((g.index ? g.index.count : g.attributes.position.count) / 3) * ((m as InstancedMesh).isInstancedMesh ? (m as InstancedMesh).count : 1)
+      let top: Object3D = m
+      while (top.parent && top.parent !== this.pipeline.scene) top = top.parent
+      const k = `${top.name || top.type}/${m.name.replace(/[:\d].*$/, '') || m.type}`
+      const e = (out[k] ??= [0, 0])
+      e[0] += Array.isArray(m.material) ? m.material.length : 1
+      e[1] += tris
+    })
+    return Object.fromEntries(Object.entries(out).sort((a, b) => b[1][0] - a[1][0]).map(([k, [c, t]]) => [k, `${c} draws ${Math.round(t / 1000)}k`]))
+  }
+
   /** Debug/test helper. */
   stats(): Record<string, number | string> {
     return {
       fps: Math.round(this.fps),
+      cpuMs: Math.round(this.cpuFrame * 10) / 10,
+      cpuRenderMs: Math.round(this.cpuRender * 10) / 10,
+      cpuPeakMs: Math.round(this.cpuPeak * 10) / 10,
       mode: this.mode,
       terrainReady: this.terrain.readyCount,
       terrainVisible: this.terrain.visibleCount,

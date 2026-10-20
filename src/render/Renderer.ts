@@ -168,7 +168,6 @@ export class RenderPipeline {
       stencil: false,
       logarithmicDepthBuffer: true,
       powerPreference: 'high-performance',
-      preserveDrawingBuffer: true,
     })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     this.renderer.outputColorSpace = SRGBColorSpace
@@ -286,8 +285,8 @@ export class RenderPipeline {
   setQuality(q: QualityTier): void {
     this.quality = q
     const dpr = window.devicePixelRatio || 1
-    const ratio = { low: 0.6, medium: 1, high: Math.min(dpr, 1.5), ultra: Math.min(dpr, 2) }[q]
-    this.renderer.setPixelRatio(ratio)
+    this.baseRatio = { low: 0.6, medium: 1, high: Math.min(dpr, 1.5), ultra: Math.min(dpr, 2) }[q]
+    this.renderer.setPixelRatio(this.baseRatio * this.renderScale)
     this.clouds.qualityPreset = q === 'ultra' ? 'high' : q === 'high' ? 'medium' : 'low'
     this.updateCloudSkip()
     this.renderer.shadowMap.enabled = q !== 'low'
@@ -295,6 +294,17 @@ export class RenderPipeline {
     this.sun.shadow.mapSize.setScalar(q === 'ultra' ? 4096 : 2048)
     this.sun.shadow.map?.dispose()
     this.sun.shadow.map = null
+    this.resize()
+  }
+
+  private baseRatio = 1
+  private renderScale = 1
+
+  /** Dynamic resolution: a multiplier on the tier's pixel ratio. */
+  setRenderScale(s: number): void {
+    if (s === this.renderScale) return
+    this.renderScale = s
+    this.renderer.setPixelRatio(this.baseRatio * s)
     this.resize()
   }
 
@@ -444,6 +454,13 @@ export class RenderPipeline {
       this.renderer.render(this.scene, this.camera)
       return
     }
+    // Shadows from a sun that barely moves: redraw the map every other frame
+    // below ultra (moving cars and people lag by at most one frame).
+    const sm = this.renderer.shadowMap
+    sm.autoUpdate = false
+    sm.needsUpdate = this.quality === 'ultra' || (this.frameNo++ & 1) === 0
     this.composer.render(dt)
   }
+
+  private frameNo = 0
 }

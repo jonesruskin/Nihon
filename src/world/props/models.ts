@@ -290,7 +290,7 @@ export function createMastModel(): PropModel {
     colored(at(new BoxGeometry(0.05, 0.9, 0.05), 0, 5.75, 2.7), steel), // dropper to contact wire
     colored(at(new BoxGeometry(0.4, 0.3, 0.3), 0, 0.15, 0), 0x777a7c), // footing
   ]
-  return { geometry: assemble(parts), materials: [vc({ roughness: 0.55, metalness: 0.5 })], castShadow: true }
+  return { geometry: assemble(parts), materials: [vc({ roughness: 0.55, metalness: 0.5 })], castShadow: false }
 }
 
 export function createStreetLightModel(): PropModel {
@@ -353,7 +353,7 @@ export function createVendingModel(): PropModel {
       .replace('#include <common>', '#include <common>\nuniform float uNight;')
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * (0.12 + 0.4 * uNight);')
   }
-  return { geometry: assemble([body, front]), materials: [vc({ roughness: 0.4, metalness: 0.1 }), frontMat], castShadow: true }
+  return { geometry: assemble([body, front]), materials: [vc({ roughness: 0.4, metalness: 0.1 }), frontMat], castShadow: false }
 }
 
 export function createPillarModel(): PropModel {
@@ -381,7 +381,7 @@ export function createSignalModel(): PropModel {
   lightMat.onBeforeCompile = (s) => {
     s.fragmentShader = s.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance = vColor.rgb * 6.0;')
   }
-  return { geometry: assemble(parts), materials: [vc({ roughness: 0.6, metalness: 0.4 }), lightMat], castShadow: true }
+  return { geometry: assemble(parts), materials: [vc({ roughness: 0.6, metalness: 0.4 }), lightMat], castShadow: false }
 }
 
 export function createSphereLamp(): BufferGeometry {

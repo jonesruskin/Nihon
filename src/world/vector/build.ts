@@ -63,11 +63,15 @@ export interface WoodArea {
   mountain: boolean
 }
 
+/** Building cell size (m) in near tiles. */
+const CELL = 700
+
 export interface TileBuild {
   id: TileId
   anchor: { lat: number; lon: number }
-  buildings: MeshData | null
-  roofs: MeshData | null
+  /** Walls and roofs in ~700 m cells (near tiles), so each can be frustum- and shadow-culled. */
+  buildings: MeshData[]
+  roofs: MeshData[]
   roads: MeshData | null
   sidewalks: MeshData | null
   ballast: MeshData | null
@@ -857,8 +861,15 @@ export function buildTile(req: BuildRequest): TileBuild {
   }
 
   // ------------------------------------------------------------- buildings
-  const buildings = new MeshBuilder(false, { bh: 1, seed: 1, kind: 1 })
-  const roofs = new MeshBuilder(true, { seed: 1 })
+  const cells = new Map<string, { buildings: MeshBuilder; roofs: MeshBuilder }>()
+  // Near tiles split into cells (culling, shadows); far ones stay one draw.
+  const cell = req.detail >= 1 ? CELL : 1e6
+  const cellAt = (x: number, z: number) => {
+    const k = `${Math.floor(x / cell)},${Math.floor(z / cell)}`
+    let c = cells.get(k)
+    if (!c) cells.set(k, (c = { buildings: new MeshBuilder(false, { bh: 1, seed: 1, kind: 1 }), roofs: new MeshBuilder(true, { seed: 1 }) }))
+    return c
+  }
   const bl = tile.layers.building
   let skipped = 0
   if (bl) {
@@ -884,6 +895,7 @@ export function buildTile(req: BuildRequest): TileBuild {
           continue
         }
         if (area < 6) continue
+        const { buildings, roofs } = cellAt(c[0], c[1])
         const seed = hash2(Math.round(c[0] * 10), Math.round(c[1] * 10))
         const gs = outer.map((p) => ground(p[0], p[1]))
         const gmin = Math.min(...gs)
@@ -1063,8 +1075,8 @@ export function buildTile(req: BuildRequest): TileBuild {
   return {
     id,
     anchor,
-    buildings: buildings.empty ? null : buildings.build(),
-    roofs: roofs.empty ? null : roofs.build(),
+    buildings: [...cells.values()].filter((c) => !c.buildings.empty).map((c) => c.buildings.build()),
+    roofs: [...cells.values()].filter((c) => !c.roofs.empty).map((c) => c.roofs.build()),
     roads: roads.empty ? null : roads.build(),
     sidewalks: sidewalks.empty ? null : sidewalks.build(),
     ballast: ballast.empty ? null : ballast.build(),

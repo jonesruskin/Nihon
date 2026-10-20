@@ -13,7 +13,7 @@ describe('vector tile builder (Shibuya)', () => {
 
   it('builds streets, buildings and furniture', () => {
     expect(out.roads!.index.length).toBeGreaterThan(1000)
-    expect(out.buildings!.index.length).toBeGreaterThan(1000)
+    expect(out.buildings.reduce((n, m) => n + m.index.length, 0)).toBeGreaterThan(1000)
     expect(out.instances.pole.length / 6).toBeGreaterThan(20)
     expect(out.pois.length).toBeGreaterThan(100)
     expect(out.paths.length).toBeGreaterThan(100)
@@ -46,7 +46,7 @@ describe('vector tile builder (Shibuya)', () => {
 
   it('skips OSM buildings covered by PLATEAU', () => {
     const covered = buildTile({ id, pbf: pbf.buffer.slice(pbf.byteOffset, pbf.byteOffset + pbf.byteLength), dem, coverage: [[139, 35, 140, 36]], detail: 1 })
-    expect(covered.buildings).toBeNull()
+    expect(covered.buildings).toHaveLength(0)
     expect(covered.stats.skippedForPlateau).toBeGreaterThan(0)
   })
 })

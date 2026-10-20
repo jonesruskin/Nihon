@@ -290,8 +290,7 @@ export class VectorManager {
   private materialize(b: TileBuild): Group {
     const group = new Group()
     group.name = `vector ${tileKey(b.id)}`
-    const add = (key: keyof TileBuild & string, cast: boolean, receive = true) => {
-      const data = b[key] as MeshData | null
+    const add = (key: keyof TileBuild & string, cast: boolean, receive = true, data = b[key] as MeshData | null) => {
       if (!data) return
       const mesh = new Mesh(this.geometry(data), this.mats[key])
       mesh.name = key
@@ -299,8 +298,8 @@ export class VectorManager {
       mesh.receiveShadow = receive
       group.add(mesh)
     }
-    add('buildings', true)
-    add('roofs', true)
+    for (const d of b.buildings) add('buildings', true, true, d)
+    for (const d of b.roofs) add('roofs', true, true, d)
     add('roads', false)
     add('sidewalks', false)
     add('ballast', false)

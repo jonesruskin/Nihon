@@ -1788,11 +1788,15 @@ export class Game {
           by[k] = (by[k] ?? 0) + 1
           return orig.call(this, cam, scene, geo, mat, obj, group)
         }
-        requestAnimationFrame(() => {
+        // Two frames: shadows are redrawn every other frame, so this is the
+        // true per-frame average.
+        requestAnimationFrame(() => requestAnimationFrame(() => {
           r.renderBufferDirect = orig
-          const { calls, triangles, lines } = r.info.render
+          const calls = Math.round(r.info.render.calls / 2)
+          const triangles = Math.round(r.info.render.triangles / 2)
+          const lines = Math.round(r.info.render.lines / 2)
           r.info.autoReset = true
-          const top = Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 24).map(([k, v]) => `${v} ${k}`).join(', ')
+          const top = Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 24).map(([k, v]) => `${Math.round(v / 2)} ${k}`).join(', ')
           let lights = 0
           let casters = 0
           let casterTris = 0
@@ -1807,7 +1811,7 @@ export class Game {
             }
           })
           done({ calls, triangles, lines, programs: r.info.programs?.length ?? 0, textures: r.info.memory.textures, lights, casters, casterTris: Math.round(casterTris), quality: this.params.quality, scale: this.governor.scale, lamps: lampUniforms.uLampCount.value, top })
-        })
+        }))
       })
     })
   }

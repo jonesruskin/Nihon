@@ -61,8 +61,52 @@ function mergeStatic(root: Object3D): void {
   const wheelOf = (o: Object3D | null): Object3D | null => (!o ? null : /^wheel_/i.test(o.name) ? o : wheelOf(o.parent))
   const wheels: Object3D[] = []
   root.traverse((o) => /^wheel_/i.test(o.name) && wheels.push(o))
-  for (const w of wheels) mergeInto(w)
+  for (const w of wheels) if (!mergeColoured(w)) mergeInto(w)
   mergeInto(root, (m) => wheelOf(m) === null)
+}
+
+/**
+ * A wheel is tyre, rim, hub and brake as separate untextured materials (four
+ * or five draw calls). Bake each part's colour into vertex colours and draw it
+ * as one mesh. Returns false (nothing changed) if any part is textured or
+ * see-through.
+ */
+function mergeColoured(root: Object3D): boolean {
+  root.updateMatrixWorld(true)
+  const inv = new Matrix4().copy(root.matrixWorld).invert()
+  const parts: Mesh[] = []
+  let ok = true
+  root.traverse((o) => {
+    const m = o as Mesh
+    if (o === root || !m.isMesh) return
+    const mat = m.material as MeshStandardMaterial
+    if (Array.isArray(m.material) || !mat.isMeshStandardMaterial || mat.map || mat.transparent) ok = false
+    parts.push(m)
+  })
+  if (!ok || parts.length < 2) return false
+  let rough = 0
+  let metal = 0
+  const geos = parts.map((m) => {
+    const mat = m.material as MeshStandardMaterial
+    rough += mat.roughness
+    metal += mat.metalness
+    const g = (m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone()).applyMatrix4(new Matrix4().multiplyMatrices(inv, m.matrixWorld))
+    for (const k of Object.keys(g.attributes)) if (!['position', 'normal'].includes(k)) g.deleteAttribute(k)
+    if (!g.attributes.normal) g.computeVertexNormals()
+    const n = g.attributes.position.count
+    const col = new Float32Array(n * 3)
+    for (let i = 0; i < n; i++) col.set([mat.color.r, mat.color.g, mat.color.b], i * 3)
+    g.setAttribute('color', new BufferAttribute(col, 3))
+    g.morphAttributes = {}
+    return g
+  })
+  const merged = mergeGeometries(geos)
+  if (!merged) return false
+  for (const m of parts) m.removeFromParent()
+  const mesh = new Mesh(merged, new MeshStandardMaterial({ vertexColors: true, roughness: rough / parts.length, metalness: metal / parts.length }))
+  mesh.name = 'merged:wheel'
+  root.add(mesh)
+  return true
 }
 
 export function mergeInto(root: Object3D, accept: (m: Mesh) => boolean = () => true): void {

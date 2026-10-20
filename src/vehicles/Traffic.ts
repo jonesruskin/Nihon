@@ -9,7 +9,7 @@ import { RoadGraph, type Lane } from './RoadGraph'
 import { buildVehicle, specById, vehicleFromScene, type CarSpec, type VehicleModel } from './carGeometry'
 import { FarTraffic, lampGeometry } from './FarTraffic'
 import type { DynamicLamp } from '../render/NightLights'
-import { modelLibrary } from '../world/props/ModelLibrary'
+import { mergeInto, modelLibrary } from '../world/props/ModelLibrary'
 import { groups, WORLD_GROUP, PLAYER_GROUP } from '../player/Player'
 import { VEHICLE_GROUP } from './Vehicle'
 
@@ -272,7 +272,11 @@ export class Traffic {
 
   /** Swap cars between the full model (near the camera) and the instanced far LOD. */
   private updateLod(): void {
-    const near = this.cars.filter((c) => c.pos.distanceTo(this.camPos) < NEAR || c.passengerAboard).sort((a, b) => a.pos.distanceToSquared(this.camPos) - b.pos.distanceToSquared(this.camPos))
+    // Attached models keep theirs a little further out (no flapping at the
+    // edge), but never more than MAX_NEAR at once.
+    const near = this.cars
+      .filter((c) => c.pos.distanceTo(this.camPos) < (c.model ? NEAR + 15 : NEAR) || c.passengerAboard)
+      .sort((a, b) => a.pos.distanceToSquared(this.camPos) - b.pos.distanceToSquared(this.camPos))
     const keep = new Set(near.slice(0, MAX_NEAR))
     let loads = 0
     // Shadows from the 5 nearest cars within 28 m only, and never from wheels
@@ -296,7 +300,7 @@ export class Traffic {
       if (want && !c.model && !c.loading && loads < 3) {
         loads++
         void this.attachModel(c)
-      } else if (!want && c.model && c.pos.distanceTo(this.camPos) > NEAR + 15) this.detachModel(c)
+      } else if (!want && c.model) this.detachModel(c)
     }
   }
 
@@ -309,7 +313,13 @@ export class Traffic {
         if (c.modelId) {
           const scene = await modelLibrary.clone(c.modelId)
           model = vehicleFromScene(c.spec, scene, c.spec.colors.length ? c.color : undefined).model
-        } else model = buildVehicle(c.spec, c.color)
+        } else {
+          // Parametric body: lights, plates and trim are separate meshes;
+          // merge the static ones per material (wheels spin, so stay apart).
+          model = buildVehicle(c.spec, c.color)
+          const m = model
+          mergeInto(m.root, (o) => o.parent === m.root && o !== m.body && !m.brakeLights.includes(o))
+        }
         const lamps = new Mesh(lampGeometry(model.spec), this.far.lampMat)
         lamps.name = 'lamps'
         model.root.add(lamps)

@@ -541,8 +541,8 @@ export class Game {
     this.weather.budget = { low: 3000, medium: 6000, high: 10000, ultra: 16000 }[q]
     const t = {
       low: { far: 30_000, split: 1.3, near: 800, vfar: 1300, err: 48, pr: 500 },
-      medium: { far: 45_000, split: 1.4, near: 1200, vfar: 2000, err: 32, pr: 800 },
-      high: { far: 70_000, split: 1.45, near: 1500, vfar: 2600, err: 24, pr: 1100 },
+      medium: { far: 45_000, split: 1.25, near: 1200, vfar: 2000, err: 32, pr: 800 },
+      high: { far: 70_000, split: 1.3, near: 1500, vfar: 2600, err: 24, pr: 1100 },
       ultra: { far: 120_000, split: 1.8, near: 1800, vfar: 3200, err: 16, pr: 1600 },
     }[q]
     this.traffic.cap = { low: 50, medium: 90, high: 140, ultra: 180 }[q]

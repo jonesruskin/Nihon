@@ -65,7 +65,7 @@ function mergeStatic(root: Object3D): void {
   mergeInto(root, (m) => wheelOf(m) === null)
 }
 
-function mergeInto(root: Object3D, accept: (m: Mesh) => boolean = () => true): void {
+export function mergeInto(root: Object3D, accept: (m: Mesh) => boolean = () => true): void {
   root.updateMatrixWorld(true)
   const inv = new Matrix4().copy(root.matrixWorld).invert()
   const groups = new Map<Material, { geos: BufferGeometry[]; meshes: Mesh[] }>()

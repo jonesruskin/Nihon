@@ -60,10 +60,10 @@ const _m = new Vector3()
 /** Cars per km of lane at a typical daytime hour (Tokyo-area counts). */
 const PER_KM: Record<string, number> = { motorway: 30, trunk: 26, primary: 22, secondary: 15, tertiary: 9, minor: 3, busway: 4, service: 0, track: 0 }
 /** Full models within this distance (a scanned car is 20-40 draw calls); instanced bodies beyond. */
-const NEAR = 65
-const MAX_NEAR = 10
+const NEAR = 55
+const MAX_NEAR = 8
 /** Simulated traffic disc around the player (m). */
-const RADIUS = 210
+const RADIUS = 195
 
 const MIX: Array<[string, number]> = [
   ['kei_car', 0.28],

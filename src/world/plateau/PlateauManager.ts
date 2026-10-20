@@ -8,16 +8,16 @@ import {
   Group,
   Matrix4,
   Mesh,
+  PerspectiveCamera,
   Vector3,
   type BufferGeometry,
   type MeshStandardMaterial,
   type Object3D,
-  type PerspectiveCamera,
   type WebGLRenderer,
 } from 'three'
 import { TilesRenderer } from '3d-tiles-renderer'
 import { GLTFExtensionsPlugin } from '3d-tiles-renderer/plugins'
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
+import { dracoLoader } from '../../core/gltf'
 import { enuBasis, approxDistanceMeters } from '../../core/geo'
 import type { WorldFrame } from '../../core/frame'
 import { BUILDING_KIND, createBuildingMaterial } from '../../render/materials/building'
@@ -37,16 +37,8 @@ export interface PlateauCity {
 interface ActiveCity {
   city: PlateauCity
   tiles: TilesRenderer
-  coverage: Array<[number, number, number, number]> // leaf content regions in degrees
-}
-
-let draco: DRACOLoader | null = null
-function getDraco(): DRACOLoader {
-  if (!draco) {
-    draco = new DRACOLoader()
-    draco.setDecoderPath(`${import.meta.env.BASE_URL}draco/`)
-  }
-  return draco
+  coverage: Array<[number, number, number, number]> // regions (degrees) of building tiles actually loaded
+  loaded: Map<object, [number, number, number, number]>
 }
 
 const LOAD_MARGIN_DEG = 0.012 // ~1.2 km
@@ -65,6 +57,14 @@ export class PlateauManager {
   cities: PlateauCity[] = []
   private active = new Map<string, ActiveCity>()
   errorTarget = 24
+  /** How far from the camera PLATEAU buildings stream (m). Beyond it the
+   *  lighter OSM buildings from the vector tiles fill the skyline: each
+   *  PLATEAU tile is ~1 MB for a 360 m square, so streaming a whole 2.6 km
+   *  view meant ~160 MB before the player could move. */
+  radius = 1100
+  /** The camera PLATEAU loads for: the real one, with its far plane at `radius`. */
+  private tileCam = new PerspectiveCamera()
+  private coverageTimer: ReturnType<typeof setTimeout> | null = null
   readonly facade: MeshStandardMaterial = createBuildingMaterial()
   /** Mesh lifecycle hooks (physics colliders). */
   onModel: ((key: string, mesh: Mesh) => void) | null = null
@@ -128,42 +128,45 @@ export class PlateauManager {
       if (g.lon < b[0] - m || g.lon > b[2] + m || g.lat < b[1] - m || g.lat > b[3] + m) this.deactivate(code)
     }
     // Far above the city, skip detail (the aerial photo carries it).
-    const nearest = [...this.active.values()]
-    for (const a of nearest) {
+    const tc = this.tileCam
+    this.camera.updateMatrixWorld()
+    this.camera.matrixWorld.decompose(tc.position, tc.quaternion, tc.scale)
+    tc.fov = this.camera.fov
+    tc.aspect = this.camera.aspect
+    tc.near = 1
+    tc.far = this.radius
+    tc.updateProjectionMatrix()
+    tc.updateMatrixWorld()
+    for (const a of this.active.values()) {
       a.tiles.errorTarget = this.errorTarget
-      a.tiles.setResolutionFromRenderer(this.camera, this.renderer)
+      a.tiles.setResolutionFromRenderer(tc, this.renderer)
       a.tiles.update()
     }
   }
 
   private activate(city: PlateauCity): void {
     const tiles = new TilesRenderer(city.url)
-    tiles.registerPlugin(new GLTFExtensionsPlugin({ dracoLoader: getDraco(), rtc: true }))
+    tiles.registerPlugin(new GLTFExtensionsPlugin({ dracoLoader, rtc: true }))
     tiles.errorTarget = this.errorTarget
-    tiles.setCamera(this.camera)
-    tiles.setResolutionFromRenderer(this.camera, this.renderer)
+    tiles.setCamera(this.tileCam)
+    tiles.setResolutionFromRenderer(this.tileCam, this.renderer)
     // The LRU cache and queues are shared by every city. PLATEAU LOD2 tiles
     // carry photo textures; the default 0.4 GB budget refuses most of a ward.
     tiles.lruCache.minSize = 300
     tiles.lruCache.maxSize = 1600
     tiles.lruCache.minBytesSize = 0.8 * 2 ** 30
     tiles.lruCache.maxBytesSize = 1.4 * 2 ** 30
-    tiles.parseQueue.maxJobs = 6
-    const active: ActiveCity = { city, tiles, coverage: [] }
-    tiles.addEventListener('load-tileset', ({ tileset }) => {
-      // Leaf content regions approximate where PLATEAU has buildings.
-      type RawTile = { children?: RawTile[]; content?: { boundingVolume?: { region?: number[] } }; boundingVolume: { region?: number[] } }
-      const d = 180 / Math.PI
-      const walk = (t: RawTile) => {
-        if (!t.children || t.children.length === 0) {
-          const r = t.content?.boundingVolume?.region ?? t.boundingVolume.region
-          if (r) active.coverage.push([r[0] * d, r[1] * d, r[2] * d, r[3] * d])
-        } else t.children.forEach(walk)
-      }
-      walk((tileset as unknown as { root: RawTile }).root)
-      this.onCoverageChange?.()
-    })
-    tiles.addEventListener('load-model', ({ scene }: { scene: Object3D }) => {
+    tiles.parseQueue.maxJobs = 4
+    // Leave bandwidth for terrain and streets: they matter more to the player.
+    tiles.downloadQueue.maxJobsPerOrigin = 4
+    const active: ActiveCity = { city, tiles, coverage: [], loaded: new Map() }
+    type RawTile = { content?: { boundingVolume?: { region?: number[] } }; boundingVolume: { region?: number[] } }
+    const d = 180 / Math.PI
+    tiles.addEventListener('load-model', ({ scene, tile }: { scene: Object3D; tile: RawTile }) => {
+      // OSM buildings are hidden exactly where a PLATEAU tile has arrived.
+      const r = tile.content?.boundingVolume?.region ?? tile.boundingVolume.region
+      if (r) active.loaded.set(tile, [r[0] * d, r[1] * d, r[2] * d, r[3] * d])
+      this.coverageChanged(active)
       this.prepareModel(scene)
       const key = `${city.code}:${this.modelSeq++}`
       scene.userData.nihonKey = key
@@ -172,8 +175,9 @@ export class PlateauManager {
         if ((o as Mesh).isMesh) this.onModel?.(`${key}:${i++}`, o as Mesh)
       })
     })
-    tiles.addEventListener('dispose-model', ({ scene }: { scene: Object3D }) => {
+    tiles.addEventListener('dispose-model', ({ scene, tile }: { scene: Object3D; tile: RawTile }) => {
       if (scene.userData.nihonKey) this.onModelDisposed?.(scene.userData.nihonKey + ':')
+      if (active.loaded.delete(tile)) this.coverageChanged(active)
     })
 
     // Shift down along the local vertical by the geoid height.
@@ -184,6 +188,16 @@ export class PlateauManager {
     this.world.anchor(tiles.group, shift)
     this.root.add(tiles.group)
     this.active.set(city.code, active)
+  }
+
+  /** Coalesce coverage changes: each one rebuilds the affected street tiles. */
+  private coverageChanged(a: ActiveCity): void {
+    a.coverage = [...a.loaded.values()]
+    if (this.coverageTimer) return
+    this.coverageTimer = setTimeout(() => {
+      this.coverageTimer = null
+      this.onCoverageChange?.()
+    }, 1500)
   }
 
   private deactivate(code: string): void {

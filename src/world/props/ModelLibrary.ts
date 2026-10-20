@@ -1,21 +1,14 @@
 // Loads optimised third-party models (CC BY / CC0, see public/models/objs/
 // CREDITS) once and hands out clones.
 import { Box3, Mesh, MeshPhysicalMaterial, MeshStandardMaterial, SRGBColorSpace, Vector3, type Object3D } from 'three'
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
+import { createGltfLoader } from '../../core/gltf'
 
 const BASE = `${import.meta.env.BASE_URL}models/objs/`
 
 export class ModelLibrary {
-  private loader = new GLTFLoader()
+  private loader = createGltfLoader()
   private cache = new Map<string, Promise<Object3D>>()
   private ready = new Map<string, Object3D>()
-
-  constructor() {
-    const draco = new DRACOLoader()
-    draco.setDecoderPath(`${import.meta.env.BASE_URL}draco/`)
-    this.loader.setDRACOLoader(draco)
-  }
 
   load(id: string): Promise<Object3D> {
     let p = this.cache.get(id)

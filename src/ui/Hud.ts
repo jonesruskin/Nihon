@@ -74,6 +74,11 @@ export class Hud {
     this.loadingStatus.textContent = status
   }
 
+  /** The opaque loading screen is up: nothing behind it is visible. */
+  get veiled(): boolean {
+    return !this.loading.classList.contains('done')
+  }
+
   hideLoading(): void {
     this.loading.classList.add('done')
     if (this.tipTimer) clearInterval(this.tipTimer)

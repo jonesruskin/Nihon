@@ -11,9 +11,14 @@ const scenarios = [
     name: 'shibuya-boot',
     query: 't=2026-10-16T13:00:00%2B09:00&quality=low',
     run: async (page) => {
-      const s = await stats(page)
+      let s = await stats(page)
       assert(s.mode === 'onfoot', `expected onfoot, got ${s.mode}`)
       assert(s.vectorTiles > 0, 'no vector tiles')
+      // The crowd streams in after the player can already move.
+      for (let i = 0; i < 60 && !(s.peds > 0); i++) {
+        await page.waitForTimeout(1000)
+        s = await stats(page)
+      }
       assert(s.peds > 0, 'no pedestrians in Shibuya at 13:00')
     },
   },

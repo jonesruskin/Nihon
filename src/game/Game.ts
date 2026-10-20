@@ -1,5 +1,6 @@
 // NIHON game orchestrator: boots the world at a real place in Japan, streams
 // it in around the player, and runs the frame loop.
+import { initGltf } from '../core/gltf'
 import { BufferAttribute, BufferGeometry, LineBasicMaterial, LineSegments, Raycaster, Vector3, type Mesh } from 'three'
 import { WorldFrame } from '../core/frame'
 import { GameClock, fromJst, jstParts } from '../core/clock'
@@ -169,7 +170,9 @@ export class Game {
   private bento: string | null = null
   private bentoTimer = 0
   private avatarName = ''
-  private dressing = false
+  private dressing: Promise<void> | null = null
+  private loggedTerrain = false
+  private warmFrames = 0
   private dressTimer = 4
   mode: Mode = 'loading'
   private last = performance.now()
@@ -188,6 +191,7 @@ export class Game {
     this.hud = new Hud(ui)
     this.nearPeople = new NearPeople(this.characters)
     this.pipeline = new RenderPipeline(canvas, this.world)
+    initGltf(this.pipeline.renderer)
     this.terrain = new TerrainManager(this.world)
     this.plateau = new PlateauManager(this.world, this.pipeline.camera, this.pipeline.renderer)
     this.vector = new VectorManager(this.world, this.terrain, this.plateau)
@@ -232,7 +236,7 @@ export class Game {
       sound: (n) => this.sound.play(n),
       worldReadyAt: (p) => {
         const g = this.world.geodeticFromWorld(p)
-        return this.terrain.isDetailedAt(g.lat, g.lon) && this.vector.pending === 0
+        return this.terrain.isDetailedAt(g.lat, g.lon) && this.vector.readyNear(g.lat, g.lon, 400)
       },
     })
     this.stationPanel = new StationPanel(ui, () => this.rail.net, {
@@ -415,23 +419,22 @@ export class Game {
 
   async start(): Promise<void> {
     const p = this.params
-    this.hud.setLoading(0.05, 'Precomputing the sky over Japan…')
+    this.hud.setLoading(0.05, 'Opening the map of Japan…')
     this.applyQuality(p.quality)
-    await Promise.all([
-      this.pipeline.init(),
-      this.plateau.init(),
-      this.physics.init(),
-      this.characters.init(),
-      this.rail.load().catch((e) => console.warn('rail network unavailable', e)),
-      this.crowd.init(Math.ceil(this.crowd.cap / 5)).catch((e) => console.warn('crowd unavailable', e)),
-      this.placed.init().catch((e) => console.warn('props unavailable', e)),
-      this.address.load().catch((e) => console.warn('municipality table unavailable', e)),
-      PopulationGrid.load()
-        .then((g) => (this.population = g))
-        .catch((e) => console.warn('population grid unavailable', e)),
-    ])
+    // Only what the first frame needs blocks play. The player's own model
+    // starts downloading as soon as the manifest is in.
+    const avatar = this.characters.init().then(() => this.dressAvatar())
+    const mark = <T,>(n: string, q: Promise<T>) => q.then((v) => (console.info(`[load] ${n}`), v))
+    // The sky precompute runs on the GPU while the map streams over the network.
+    // (`?skylast` serialises them: software GPUs in CI stall image decoding
+    // behind the precompute, which would hide the streaming time we measure.)
+    const skyLast = new URLSearchParams(location.search).has('skylast')
+    let sky = skyLast ? Promise.resolve() : mark('sky', this.pipeline.init())
+    await Promise.all([mark('plateau', this.plateau.init()), mark('physics', this.physics.init())])
     this.hud.setLoading(0.2, 'Reading the terrain (国土地理院)…')
+    this.terrain.prefetchChain(p.lat, p.lon)
     await this.terrain.prefetchAround(p.lat, p.lon, 300)
+    console.info('[load] elevation')
     const ground = this.terrain.heightAt(p.lat, p.lon)
     const cam = this.pipeline.camera
     cam.position.copy(this.world.worldFromGeodetic(p.lat, p.lon, ground + Math.max(1.7, p.altitude)))
@@ -440,32 +443,53 @@ export class Game {
     cam.rotation.set(this.rig.pitch, this.rig.yaw, 0, 'YXZ')
     requestAnimationFrame(this.frame)
 
-    // Stream until the spot is ready at full detail.
-    const t0 = performance.now()
-    const cities = this.plateau.citiesAt(p.lat, p.lon)
-    while (performance.now() - t0 < 90_000) {
-      const terrainOk = this.terrain.isDetailedAt(p.lat, p.lon)
-      const vectorOk = this.vector.loadedCount > 0 && this.vector.pending === 0
-      const progress = 0.25 + (terrainOk ? 0.35 : 0) + (vectorOk ? 0.3 : 0)
-      this.hud.setLoading(
-        progress,
-        !terrainOk
-          ? 'Draping aerial photographs on the land…'
-          : !vectorOk
-            ? 'Laying streets, rail and buildings (OpenStreetMap)…'
-            : cities.length
-              ? `Raising ${cities[0].name} (PLATEAU)…`
-              : 'Almost there…',
-      )
-      if (terrainOk && vectorOk) break
-      await new Promise((r) => setTimeout(r, 300))
-    }
+    await this.waitForWorld(p.lat, p.lon, 90_000, 0.25)
+    this.hud.setLoading(0.95, 'Lighting the sky…')
+    if (skyLast) sky = mark('sky', this.pipeline.init())
+    await Promise.all([sky, mark('avatar', avatar)])
     if (p.mode === 'onfoot') await this.spawnPlayer(p.lat, p.lon)
     else this.mode = 'fly'
+    console.info('[load] spawned')
     this.hud.setLoading(1, '')
+    await this.warmUp()
     this.hud.hideLoading()
     this.updateHints()
+    // Everything else streams in while the player is already walking.
+    void this.crowd.init(Math.ceil(this.crowd.cap / 5)).catch((e) => console.warn('crowd unavailable', e))
+    void this.placed.init().catch((e) => console.warn('props unavailable', e))
+    void this.rail.load().catch((e) => console.warn('rail network unavailable', e))
+    void this.address.load().catch((e) => console.warn('municipality table unavailable', e))
+    void PopulationGrid.load()
+      .then((g) => (this.population = g))
+      .catch((e) => console.warn('population grid unavailable', e))
     if (this.bench) void this.runBench()
+  }
+
+  /** Draw a couple of frames under the veil so shaders are compiled before the reveal. */
+  private warmUp(): Promise<void> {
+    this.warmFrames = 2
+    return new Promise((done) => {
+      const check = () => (this.warmFrames > 0 ? requestAnimationFrame(check) : done())
+      requestAnimationFrame(check)
+    })
+  }
+
+  /** Ground under the spot at full detail and the streets within ~600 m:
+   *  enough to stand in. Wider rings keep streaming after the veil lifts. */
+  private async waitForWorld(lat: number, lon: number, limitMs: number, base: number): Promise<void> {
+    const t0 = performance.now()
+    const near = 600
+    while (performance.now() - t0 < limitMs) {
+      const terrainOk = this.terrain.isDetailedAt(lat, lon)
+      const vectorOk = this.vector.readyNear(lat, lon, near)
+      this.hud.setLoading(
+        base + (terrainOk ? 0.35 : 0) + (vectorOk ? 0.3 : 0),
+        !terrainOk ? 'Draping aerial photographs on the land…' : !vectorOk ? 'Laying streets, rail and buildings (OpenStreetMap)…' : 'Almost there…',
+      )
+      if (terrainOk && !this.loggedTerrain) (this.loggedTerrain = true), console.info('[load] terrain')
+      if (terrainOk && vectorOk) return console.info(`[load] world ready (${this.pipeline.renderer.info.render.frame} frames)`)
+      await new Promise((r) => setTimeout(r, 200))
+    }
   }
 
   /** ?bench: a turn on the spot at three kinds of place, then a report. */
@@ -505,11 +529,12 @@ export class Game {
     this.crowd.cap = c[1]
     this.weather.budget = { low: 3000, medium: 6000, high: 10000, ultra: 16000 }[q]
     const t = {
-      low: { far: 30_000, split: 1.3, near: 800, vfar: 1300, err: 48 },
-      medium: { far: 60_000, split: 1.5, near: 1200, vfar: 2000, err: 32 },
-      high: { far: 90_000, split: 1.6, near: 1500, vfar: 2600, err: 24 },
-      ultra: { far: 120_000, split: 2.0, near: 1800, vfar: 3200, err: 16 },
+      low: { far: 30_000, split: 1.3, near: 800, vfar: 1300, err: 48, pr: 500 },
+      medium: { far: 60_000, split: 1.5, near: 1200, vfar: 2000, err: 32, pr: 800 },
+      high: { far: 90_000, split: 1.6, near: 1500, vfar: 2600, err: 24, pr: 1100 },
+      ultra: { far: 120_000, split: 2.0, near: 1800, vfar: 3200, err: 16, pr: 1600 },
     }[q]
+    this.plateau.radius = t.pr
     this.terrain.settings.farRadius = t.far
     this.terrain.settings.splitFactor = t.split
     this.vector.nearRadius = t.near
@@ -817,8 +842,14 @@ export class Game {
 
   /** The tourist dresses for the weather too: a jacket and long sleeves
    *  below ~15°C, a T-shirt above ~18°C (in between, keep what you wear). */
-  private async dressAvatar(): Promise<void> {
-    if (this.dressing || !this.characters.manifest.length) return
+  private dressAvatar(): Promise<void> {
+    if (this.dressing) return this.dressing
+    this.dressing = this.dressAvatarNow().finally(() => (this.dressing = null))
+    return this.dressing
+  }
+
+  private async dressAvatarNow(): Promise<void> {
+    if (!this.characters.manifest.length) return
     const base = this.params.character.replace(/_w$/, '')
     const winterName = `${base}_w`
     const hasWinter = this.characters.manifest.some((m) => m.name === winterName)
@@ -830,7 +861,6 @@ export class Game {
     else if (T < 15) want = winterName
     else if (T > 18) want = base
     if (want === this.avatarName && this.avatar) return
-    this.dressing = true
     try {
       const next = await this.characters.create(want)
       if (this.avatar) {
@@ -842,8 +872,6 @@ export class Game {
       this.player.object.add(next.object)
     } catch (e) {
       console.warn('avatar failed', want, e)
-    } finally {
-      this.dressing = false
     }
   }
 
@@ -1111,7 +1139,12 @@ export class Game {
     this.updateSound(dt)
     if (this.liveTime && Math.abs(this.clock.date.getTime() - Date.now()) > 120_000 && this.mode !== 'train') this.liveTime = false
     if (this.benchSpin) this.rig.yaw += dt * ((Math.PI * 2) / 20)
-    this.pipeline.render(dt)
+    // Behind the opaque loading screen, drawing the world only steals time
+    // from streaming it (warm-up frames compile shaders before the reveal).
+    if (!this.hud.veiled || this.warmFrames > 0) {
+      if (this.warmFrames > 0) this.warmFrames--
+      this.pipeline.render(dt)
+    }
     if (this.bench) {
       const info = this.pipeline.renderer.info
       this.bench.sample(realDt, info.render.calls, info.render.triangles)
@@ -1568,21 +1601,16 @@ export class Game {
     this.world.rebase(lat, lon)
     this.places = []
     this.currentPlace = ''
+    this.terrain.prefetchChain(lat, lon)
     await this.terrain.prefetchAround(lat, lon, 300).catch(() => {})
     const ground = this.terrain.heightAt(lat, lon)
     const cam = this.pipeline.camera
     cam.position.copy(this.world.worldFromGeodetic(lat, lon, (Number.isNaN(ground) ? 0 : ground) + 1.7))
     if (heading !== undefined) this.rig.yaw = (-heading * Math.PI) / 180
-    const t0 = performance.now()
-    while (performance.now() - t0 < 60_000) {
-      const terrainOk = this.terrain.isDetailedAt(lat, lon)
-      const vectorOk = this.vector.loadedCount > 0 && this.vector.pending === 0
-      this.hud.setLoading(0.2 + (terrainOk ? 0.4 : 0) + (vectorOk ? 0.3 : 0), !terrainOk ? 'Draping aerial photographs on the land…' : 'Laying streets and buildings…')
-      if (terrainOk && vectorOk) break
-      await new Promise((r) => setTimeout(r, 300))
-    }
+    await this.waitForWorld(lat, lon, 60_000, 0.2)
     this.player.body?.setEnabled(true)
     await this.spawnPlayer(lat, lon)
+    await this.warmUp()
     this.hud.hideLoading()
     if (dest) {
       this.currentPlace = dest.kanji

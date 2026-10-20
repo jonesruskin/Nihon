@@ -15,9 +15,9 @@ import {
   type Material,
   type Object3D,
 } from 'three'
-import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { createGltfLoader } from '../core/gltf'
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js'
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 
 export interface CharacterInfo {
   name: string
@@ -33,13 +33,7 @@ const BASE = `${import.meta.env.BASE_URL}models/people/`
 export class CharacterLibrary {
   manifest: CharacterInfo[] = []
   private cache = new Map<string, Promise<GLTF>>()
-  private loader = new GLTFLoader()
-
-  constructor() {
-    const draco = new DRACOLoader()
-    draco.setDecoderPath(`${import.meta.env.BASE_URL}draco/`)
-    this.loader.setDRACOLoader(draco)
-  }
+  private loader = createGltfLoader()
 
   async init(): Promise<void> {
     try {

@@ -132,6 +132,23 @@ export class VectorManager {
     return this.jobs.size
   }
 
+  /** Every tile within `radius` m has been built once (rebuilds don't count). */
+  readyNear(lat: number, lon: number, radius: number): boolean {
+    const g = { lat, lon }
+    let any = false
+    for (const id of tilesAround(lat, lon, radius, Z)) {
+      const b = tileBounds(id)
+      const dx = Math.max(0, b.west - lon, lon - b.east) * 111412 * Math.cos((lat * Math.PI) / 180)
+      const dy = Math.max(0, b.south - lat, lat - b.north) * 111132
+      if (Math.hypot(dx, dy) > radius) continue
+      const t = this.tiles.get(tileKey(id))
+      if (!t || t.state === 'loading') return false
+      any = true
+    }
+    void g
+    return any
+  }
+
   /** All POIs from loaded tiles. */
   *pois(): Generator<{ poi: Poi; tile: VTile }> {
     for (const t of this.tiles.values()) if (t.build) for (const poi of t.build.pois) yield { poi, tile: t }
@@ -226,7 +243,7 @@ export class VectorManager {
 
   private async load(t: VTile, distance: number): Promise<void> {
     try {
-      const dem = await this.terrain.dem.load(t.id)
+      const dem = await this.terrain.dem.load(t.id, distance / 1000)
       const coverage = this.coverageFor(t.id)
       const job = this.nextJob++
       const req: WorkerRequest = {

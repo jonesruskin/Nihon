@@ -17,6 +17,7 @@ import { LocalFrame } from '../../core/geo'
 import { anchorMatrix, type WorldFrame } from '../../core/frame'
 import {
   children,
+  lonLatToTileXY,
   parentAt,
   tileBounds,
   tileCenter,
@@ -238,6 +239,21 @@ export class TerrainManager {
     await Promise.all(tilesAround(lat, lon, radius, DEM_MAX_ZOOM).map((t) => this.dem.load(t)))
   }
 
+  /**
+   * Jump the queue for the quadtree path down to full detail under one spot
+   * (each level's four siblings, since a level only refines once all four
+   * are ready), so the ground under a spawn is sharp seconds after start
+   * instead of after the whole horizon has streamed.
+   */
+  prefetchChain(lat: number, lon: number): void {
+    const { x, y } = lonLatToTileXY(lon, lat, this.settings.maxZoom)
+    for (let z = ROOT_ZOOM; z <= this.settings.maxZoom; z++) {
+      const at = parentAt({ z: this.settings.maxZoom, x: Math.floor(x), y: Math.floor(y) }, z)
+      const group = z === ROOT_ZOOM ? [at] : children(parentAt(at, z - 1))
+      for (const id of group) this.ensure(id, 0, -1)
+    }
+  }
+
   update(cameraWorld: Vector3, now: number): void {
     this.frameCount++
     if (this.frameCount % 6 !== 1) return
@@ -287,7 +303,7 @@ export class TerrainManager {
     if (tile.state === 'ready') out.add(tile)
   }
 
-  private ensure(id: TileId, distance: number): TerrainTile {
+  private ensure(id: TileId, distance: number, bias = 0): TerrainTile {
     const k = tileKey(id)
     let t = this.tiles.get(k)
     if (!t) {
@@ -296,18 +312,18 @@ export class TerrainManager {
     }
     if (t.state === 'idle') {
       t.state = 'loading'
-      void this.load(t, distance)
+      void this.load(t, distance, bias)
     }
     return t
   }
 
-  private async load(t: TerrainTile, distance: number): Promise<void> {
+  private async load(t: TerrainTile, distance: number, bias = 0): Promise<void> {
     const id = t.id
-    const priority = distance / tileSizeMeters(id) + (18 - id.z) * 0.05
+    const priority = bias + distance / tileSizeMeters(id) + (18 - id.z) * 0.05
     try {
       const demId = id.z > DEM_MAX_ZOOM ? parentAt(id, DEM_MAX_ZOOM) : id
       const [dem, photo] = await Promise.all([
-        this.dem.load(demId),
+        this.dem.load(demId, priority),
         fetchImageBitmap(PHOTO(id), priority).catch(() => null),
       ])
       const c = tileCenter(id)

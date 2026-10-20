@@ -7,10 +7,10 @@
 // gets genuine light pools with specular glints on cars and wet roads.
 // Sources beyond the pool still glow through their emissive heads and bloom.
 import { Color, HemisphereLight, Matrix4, Object3D, Vector3, type Camera, type Scene } from 'three'
-import { lampUniforms, MAX_LAMPS } from './lamps'
+import { commitLamps, lampData, MAX_LAMPS } from './lamps'
 
 /** Source kinds, stored in the 5th float of each record. */
-export const LAMP = { street: 0, pole: 1, vending: 2 } as const
+export const LAMP = { street: 0, pole: 1, vending: 2, shop: 3 } as const
 
 interface Spec {
   intensity: number // candela
@@ -20,10 +20,13 @@ interface Spec {
   color: Color
 }
 
+// LED street lights throw a wide "batwing" beam along the road, so the pool
+// is broad and soft-edged rather than a disc under the lamp.
 const SPECS: Spec[] = [
-  { intensity: 40, outer: 1.05, inner: 0.35, range: 40, color: new Color(1.0, 0.93, 0.84) }, // LED street lamp
-  { intensity: 14, outer: 1.0, inner: 0.3, range: 24, color: new Color(0.95, 0.97, 1.0) }, // pole security LED
+  { intensity: 34, outer: 1.3, inner: 0.55, range: 42, color: new Color(1.0, 0.94, 0.86) }, // LED street lamp
+  { intensity: 12, outer: 1.25, inner: 0.5, range: 26, color: new Color(0.95, 0.97, 1.0) }, // pole security LED
   { intensity: 6, outer: 1.35, inner: 0.6, range: 10, color: new Color(0.92, 0.97, 1.0) }, // vending machine glow
+  { intensity: 14, outer: 4, inner: 4, range: 16, color: new Color(1.0, 0.9, 0.76) }, // shop front spill
 ]
 
 /** A light that moves (headlights): set by its owner every frame. */
@@ -67,6 +70,8 @@ export class NightLights {
   readonly dynamic: DynamicLamp[] = []
   /** 0 = countryside, 1 = dense city: drives sky glow and ambient fill. */
   urban = 0
+  /** QA/tuning multiplier on the ambient city fill. */
+  fillScale = 1
 
   constructor(scene: Scene) {
     // Scattered city light (light pollution bouncing off haze and walls).
@@ -120,15 +125,24 @@ export class NightLights {
       this.pick(_cam.setFromMatrixPosition(camera.matrixWorld))
     }
     const view = camera.matrixWorldInverse
-    const { uLampPos, uLampCol, uLampDir } = lampUniforms
     let count = 0
     const put = (pos: Vector3, dir: Vector3, color: Color, intensity: number, range: number, outer: number, inner: number) => {
-      const i = count++
+      const o = count++ * 12
+      const d = lampData
       _p.copy(pos).applyMatrix4(view)
-      uLampPos.value[i].set(_p.x, _p.y, _p.z, range)
+      d[o] = _p.x
+      d[o + 1] = _p.y
+      d[o + 2] = _p.z
+      d[o + 3] = range
+      d[o + 4] = color.r * intensity
+      d[o + 5] = color.g * intensity
+      d[o + 6] = color.b * intensity
+      d[o + 7] = outer > 3 ? -2 : Math.cos(outer)
       _p.copy(dir).transformDirection(view)
-      uLampDir.value[i].set(_p.x, _p.y, _p.z, Math.cos(inner))
-      uLampCol.value[i].set(color.r * intensity, color.g * intensity, color.b * intensity, outer > 3 ? -2 : Math.cos(outer))
+      d[o + 8] = _p.x
+      d[o + 9] = _p.y
+      d[o + 10] = _p.z
+      d[o + 11] = Math.cos(inner)
     }
 
     if (night > 0.01) {
@@ -154,13 +168,19 @@ export class NightLights {
           _beam.copy(p.dir).multiplyScalar(3)
           _beam.y -= 1.6
           put(_at, _beam.normalize(), spec.color, spec.intensity * level * night, spec.range, spec.outer, spec.inner)
+        } else if (p.kind === LAMP.shop) {
+          _at.copy(p.p)
+          put(_at, DOWN, spec.color, spec.intensity * level * night, spec.range, spec.outer, spec.inner)
         } else put(p.p, DOWN, spec.color, spec.intensity * level * night, spec.range, spec.outer, spec.inner)
       }
       for (const k of this.levels.keys()) if (!seen.has(k)) this.levels.delete(k)
     } else this.levels.clear()
-    lampUniforms.uLampCount.value = count
+    commitLamps(count)
 
-    this.fill.intensity = night * (0.015 + 0.03 * this.urban)
+    // Light pollution bouncing off haze, walls and wet asphalt. Kept low: a
+    // uniform fill flattens night into overcast day; the lamps, shop fronts
+    // and signs must do the lighting.
+    this.fill.intensity = night * (0.012 + 0.04 * this.urban) * this.fillScale
   }
 
   /** Re-apply world positions after a floating-origin rebase. */

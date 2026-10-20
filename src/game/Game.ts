@@ -3,7 +3,7 @@
 import { initGltf } from '../core/gltf'
 import { lampUniforms } from '../render/lamps'
 import { deviceTier, FrameGovernor, TIERS } from '../render/FrameGovernor'
-import { BufferAttribute, BufferGeometry, Frustum, LineBasicMaterial, LineSegments, Matrix4, Raycaster, Sphere, Vector3, type InstancedMesh, type Light, type Mesh, type Object3D } from 'three'
+import { BufferAttribute, BufferGeometry, Color, Frustum, LineBasicMaterial, LineSegments, Matrix4, Raycaster, Sphere, Vector3, type InstancedMesh, type Light, type Mesh, type Object3D } from 'three'
 import { WorldFrame } from '../core/frame'
 import { GameClock, fromJst, jstParts } from '../core/clock'
 import { pendingRequests } from '../core/net'
@@ -145,6 +145,7 @@ export class Game {
   private bench = new URLSearchParams(location.search).has('bench') ? new Bench() : null
   private benchSpin = false
   private governor: FrameGovernor
+  private ownLamp = { pos: new Vector3(), dir: new Vector3(), color: new Color(1, 0.96, 0.9), intensity: 110, range: 55, outer: 0.5, inner: 0.22 }
   private gpuName = ''
   /** Main-thread ms per frame (smoothed), of which submitting the render; decaying peak. */
   private cpuFrame = 0
@@ -479,6 +480,7 @@ export class Game {
   /** Draw a couple of frames under the veil so shaders are compiled before the reveal. */
   private warmUp(): Promise<void> {
     this.warmFrames = 2
+    this.pipeline.snapExposure = true
     return new Promise((done) => {
       const check = () => (this.warmFrames > 0 ? requestAnimationFrame(check) : done())
       requestAnimationFrame(check)
@@ -543,6 +545,7 @@ export class Game {
       high: { far: 90_000, split: 1.45, near: 1500, vfar: 2600, err: 24, pr: 1100 },
       ultra: { far: 120_000, split: 1.8, near: 1800, vfar: 3200, err: 16, pr: 1600 },
     }[q]
+    this.traffic.cap = { low: 50, medium: 90, high: 140, ultra: 180 }[q]
     this.plateau.radius = t.pr
     this.plateau.errorTarget = t.err
     this.terrain.settings.farRadius = t.far
@@ -1091,7 +1094,23 @@ export class Game {
       const focus = this.mode === 'train' || this.mode === 'ferry' ? cam.position : this.mode === 'driving' && this.vehicles.current ? this.vehicles.current.position : this.ride ? this.ride.car.pos : this.player.feet
       this.traffic.playerPos = this.mode === 'onfoot' ? this.player.feet : null
       this.traffic.playerCar = this.mode === 'driving' && this.vehicles.current ? { pos: this.vehicles.current.position, length: this.vehicles.current.spec.length } : null
+      this.traffic.camPos.copy(cam.position)
+      cam.getWorldDirection(this.traffic.camDir)
+      this.traffic.night = this.pipeline.night
       this.traffic.update(dt, focus, this.clock.jst.hourFloat)
+      // Moving lights for the shader-lamp pool: your own headlights first.
+      const dyn = this.pipeline.lights.dynamic
+      dyn.length = 0
+      const own = this.mode === 'driving' ? this.vehicles.current : null
+      if (own) {
+        const fwd = this.ownLamp.dir.set(0, 0, -1).applyQuaternion(own.quaternion)
+        this.ownLamp.pos.copy(own.position).addScaledVector(fwd, own.spec.length / 2 + 0.3)
+        this.ownLamp.pos.y += 0.75
+        fwd.y -= 0.1
+        fwd.normalize()
+        dyn.push(this.ownLamp)
+      }
+      dyn.push(...this.traffic.headlamps)
       this.rail.updateAmbient(dt, cam.position, this.clock.jst.hourFloat)
       this.updateCrowd(dt, this.mode === 'onfoot' ? this.player.feet : cam.position)
     }
@@ -1822,6 +1841,10 @@ export class Game {
       physics: this.physics.staticCount,
       settled: Number(this.mode !== 'loading' && this.elapsed > 8 && pendingRequests() === 0),
       peds: this.crowd.peds.length,
+      cars: this.traffic.cars.length,
+      carsNear: this.traffic.cars.filter((c) => c.pos.distanceTo(this.pipeline.camera.position) < 150).length,
+      carModels: this.traffic.cars.filter((c) => c.model).length,
+      carTarget: this.traffic.targetCount(),
       pedTarget: Math.round(this.crowdTarget),
       pedPerHa: Math.round(this.pedDensity * 10) / 10,
       forestTrees: this.forest.count,

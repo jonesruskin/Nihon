@@ -341,6 +341,31 @@ function vendingFront(): CanvasTexture {
   })
 }
 
+/** Air-conditioner outdoor unit (室外機): rows of them on every flat roof. */
+export function createAcUnitModel(): PropModel {
+  const body = colored(at(new BoxGeometry(0.82, 0.62, 0.3), 0, 0.31 + 0.12, 0), 0xdcdcd6)
+  const fan = colored(at(new CylinderGeometry(0.22, 0.22, 0.02, 14), 0.12, 0.43, 0.155, Math.PI / 2), 0x3c3d3e)
+  const feet = colored(at(new BoxGeometry(0.78, 0.12, 0.34), 0, 0.06, 0), 0x6a6b6c)
+  return { geometry: assemble([body, fan, feet]), materials: [vc({ roughness: 0.6, metalness: 0.2 })], castShadow: false }
+}
+
+/** Rooftop water tank (高置水槽): FRP panel tank on a steel frame. */
+export function createTankModel(): PropModel {
+  const tank = colored(at(new BoxGeometry(2.2, 1.6, 1.6), 0, 0.8 + 0.7, 0), 0xcfd5cc)
+  const parts = [tank]
+  for (const x of [-0.95, 0.95]) for (const z of [-0.7, 0.7]) parts.push(colored(at(new BoxGeometry(0.12, 0.7, 0.12), x, 0.35, z), 0x5b5f63))
+  for (let i = -2; i <= 2; i++) parts.push(colored(at(new BoxGeometry(0.03, 1.62, 1.62), i * 0.44, 1.5, 0), 0xb9c0b8))
+  return { geometry: assemble(parts), materials: [vc({ roughness: 0.7 })], castShadow: true }
+}
+
+/** Yagi TV aerial on a short mast, the silhouette of every house roof. */
+export function createAntennaModel(): PropModel {
+  const parts = [colored(at(new CylinderGeometry(0.025, 0.03, 2.4, 6), 0, 1.2, 0), 0x9a9c9e)]
+  parts.push(colored(at(new BoxGeometry(0.03, 0.03, 1.6), 0, 2.25, 0), 0x9a9c9e))
+  for (let i = 0; i < 7; i++) parts.push(colored(at(new BoxGeometry(0.62 - i * 0.04, 0.015, 0.015), 0, 2.25, -0.75 + i * 0.25), 0xa5a7a9))
+  return { geometry: assemble(parts), materials: [vc({ roughness: 0.5, metalness: 0.6 })], castShadow: false }
+}
+
 export function createVendingModel(): PropModel {
   const body = colored(at(new BoxGeometry(1.0, 1.83, 0.75), 0, 0.915, 0), 0xffffff)
   const front = at(new PlaneGeometry(0.94, 1.76), 0, 0.915, 0.376)

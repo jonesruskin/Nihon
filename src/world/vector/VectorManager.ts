@@ -41,11 +41,17 @@ import {
   createMastModel,
   createTreeModels,
   createVendingModel,
+  createAcUnitModel,
+  createTankModel,
+  createAntennaModel,
   type PropModel,
 } from '../props/models'
 
+/** OSM POI classes that are lit, open-fronted businesses at night. */
+const SHOP_CLASSES = new Set(['shop', 'grocery', 'convenience', 'restaurant', 'fast_food', 'cafe', 'bar', 'beer', 'clothing_store', 'bakery', 'pharmacy', 'alcohol_shop', 'ice_cream', 'hairdresser', 'laundry', 'mobile_phone', 'books', 'bank', 'karaoke', 'cinema', 'theatre', 'entertainment', 'pub', 'nightclub'])
+
 /** Max draw distance (m) per prop type. */
-const PROP_RANGE: Record<string, number> = { pole: 450, light: 600, vending: 220, signal: 500, pillar: 3000, tree: 900, wires: 350, mast: 550 }
+const PROP_RANGE: Record<string, number> = { pole: 450, light: 600, vending: 220, signal: 500, pillar: 3000, tree: 900, wires: 350, mast: 550, ac: 260, tank: 700, antenna: 320 }
 
 const TILE_URL = (t: TileId) => `https://tiles.openfreemap.org/planet/20261011_080001_pt/${t.z}/${t.x}/${t.y}.pbf`
 const Z = 14
@@ -115,6 +121,9 @@ export class VectorManager {
       light: createStreetLightModel(),
       mast: createMastModel(),
       vending: createVendingModel(),
+      ac: createAcUnitModel(),
+      tank: createTankModel(),
+      antenna: createAntennaModel(),
       pillar: createPillarModel(),
       signal: createSignalModel(),
     }
@@ -355,6 +364,7 @@ export class VectorManager {
     instance('signal', this.props.signal, I.signal, () => true, () => new Vector3(1, 1, 1))
     instance('pillar', this.props.pillar, I.pillar, () => true, (s, e) => new Vector3(e, s, 1))
     if (I.mast) instance('mast', this.props.mast, I.mast, () => true, (s) => new Vector3(1, s / 7, 1))
+    for (const k of ['ac', 'tank', 'antenna'] as const) if (I[k]?.length) instance(k, this.props[k], I[k], () => true, (s) => new Vector3(s, s, s))
     this.trees.forEach((model, type) => instance('tree', model, I.tree, (e) => Math.round(e) === type, (s) => new Vector3(s, s, s)))
 
     if (this.lights) {
@@ -364,9 +374,12 @@ export class VectorManager {
         const a = I.light[i + 3]
         L.push(I.light[i] + 2.05 * Math.sin(a), I.light[i + 1] + 8.0, I.light[i + 2] + 2.05 * Math.cos(a), a, LAMP.street)
       }
+      // Most poles on Japanese side streets carry a 防犯灯 (security LED).
       for (let i = 0; i < I.pole.length; i += 6) {
-        if (I.pole[i + 5] < 0.3) L.push(I.pole[i], I.pole[i + 1] + 5.2, I.pole[i + 2], 0, LAMP.pole)
+        if (I.pole[i + 5] < 0.65) L.push(I.pole[i], I.pole[i + 1] + 5.2, I.pole[i + 2], 0, LAMP.pole)
       }
+      // Shops, restaurants and konbini spill light onto the pavement.
+      for (const p of b.pois) if (SHOP_CLASSES.has(p.cls)) L.push(p.x, p.y + 2.8, p.z, 0, LAMP.shop)
       for (let i = 0; i < I.vending.length; i += 6) L.push(I.vending[i], I.vending[i + 1], I.vending[i + 2], I.vending[i + 3], LAMP.vending)
       this.lights.register(group, new Float32Array(L))
     }

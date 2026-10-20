@@ -1,6 +1,7 @@
 // Loads optimised third-party models (CC BY / CC0, see public/models/objs/
 // CREDITS) once and hands out clones.
-import { Box3, Mesh, MeshPhysicalMaterial, MeshStandardMaterial, SRGBColorSpace, Vector3, type Object3D } from 'three'
+import { Box3, BufferAttribute, Matrix4, Mesh, MeshPhysicalMaterial, MeshStandardMaterial, SRGBColorSpace, Vector3, type BufferGeometry, type Material, type Object3D } from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { createGltfLoader } from '../../core/gltf'
 
 const BASE = `${import.meta.env.BASE_URL}models/objs/`
@@ -50,7 +51,43 @@ export class ModelLibrary {
   }
 }
 
+/**
+ * Scanned models arrive as dozens of small meshes (a sedan is ~40 draw calls,
+ * twice with shadows). Merge everything that doesn't move into one mesh per
+ * material; wheels (wheel_*) stay separate so they can spin.
+ */
+function mergeStatic(root: Object3D): void {
+  root.updateMatrixWorld(true)
+  const inv = new Matrix4().copy(root.matrixWorld).invert()
+  const groups = new Map<Material, { geos: BufferGeometry[]; meshes: Mesh[] }>()
+  const moving = (o: Object3D | null): boolean => !!o && (/^wheel_/i.test(o.name) || moving(o.parent))
+  root.traverse((o) => {
+    const m = o as Mesh
+    if (!m.isMesh || Array.isArray(m.material) || moving(m)) return
+    const g = m.geometry.clone().applyMatrix4(new Matrix4().multiplyMatrices(inv, m.matrixWorld))
+    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k)
+    if (!g.attributes.normal) g.computeVertexNormals()
+    if (!g.attributes.uv) g.setAttribute('uv', new BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2))
+    g.morphAttributes = {}
+    const e = groups.get(m.material) ?? { geos: [], meshes: [] }
+    e.geos.push(g)
+    e.meshes.push(m)
+    groups.set(m.material, e)
+  })
+  for (const [mat, { geos, meshes }] of groups) {
+    if (meshes.length < 2) continue
+    const indexed = geos.every((g) => g.index)
+    const merged = mergeGeometries(indexed ? geos : geos.map((g) => (g.index ? g.toNonIndexed() : g)))
+    if (!merged) continue
+    for (const m of meshes) m.removeFromParent()
+    const mesh = new Mesh(merged, mat)
+    mesh.name = `merged:${mat.name}`
+    root.add(mesh)
+  }
+}
+
 function prepare(root: Object3D): void {
+  mergeStatic(root)
   root.traverse((o) => {
     const m = o as Mesh
     if (!m.isMesh) return

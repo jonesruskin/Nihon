@@ -1,11 +1,12 @@
 // Parked cars along real streets around the player, entering/exiting, and
 // the driving loop. Japan drives on the left, so cars park on the left kerb
 // and the driver's door is on the right.
-import { Group, Vector3 } from 'three'
+import { Group, Mesh, Vector3 } from 'three'
 import type { Physics } from '../physics/Physics'
 import type { VectorManager } from '../world/vector/VectorManager'
 import { Vehicle, type DriveInput } from './Vehicle'
 import { specById, vehicleFromScene, type CarSpec } from './carGeometry'
+import { lampGeometry, lampMaterial } from './FarTraffic'
 import { modelLibrary } from '../world/props/ModelLibrary'
 import type { Input } from '../player/Input'
 
@@ -174,6 +175,7 @@ export class VehicleManager {
         const scene = await modelLibrary.clone(id)
         const color = base.colors.length ? base.colors[Math.floor(Math.random() * base.colors.length)] : undefined
         const { model, spec } = vehicleFromScene(base, scene, color)
+        model.root.add(new Mesh(lampGeometry(spec), lampMaterial))
         v = new Vehicle(this.physics, spec, color, model)
       } else v = new Vehicle(this.physics, base)
       v.spawn(at, yaw)

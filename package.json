@@ -20,6 +20,7 @@
     "@takram/three-geospatial": "^0.9.1",
     "3d-tiles-renderer": "^0.5.3",
     "earcut": "^3.2.4",
+    "n8ao": "^2.0.1",
     "pbf": "^5.1.2",
     "postprocessing": "^6.39.5",
     "three": "^0.186.1"

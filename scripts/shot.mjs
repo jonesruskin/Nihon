@@ -29,6 +29,7 @@ if (actions) {
     if (k === 'eval') console.log('eval:', JSON.stringify(await page.evaluate(v).catch((e) => String(e))))
     else if (k === 'wait') await page.waitForTimeout(Number(v))
     else if (k === 'key') await page.keyboard.press(v)
+    else if (k === 'shot') await page.screenshot({ path: v, timeout: 120000 })
     else if (k === 'hold') { const [key, ms] = v.split(':'); await page.keyboard.down(key); await page.waitForTimeout(Number(ms)); await page.keyboard.up(key) }
   }
 }

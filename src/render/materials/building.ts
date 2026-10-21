@@ -475,26 +475,26 @@ FacadeSample facade() {
     float winFrac = apartment && v > 3.0 ? 0.32 : (house ? 0.6 : 1.0) * winW * winH;
     vec3 avgGlow = mix(warm, cool, 0.45) * occupancy * 0.09 * winFrac;
     emis += mix(col * lit * intensity, avgGlow, far) * uNight;
-    // Street level: shop fronts, konbini and restaurants stay lit into the
-    // night and are what actually lights a Japanese street.
-    if (shop) {
-      float open = shopOpen;
-      vec3 shopC = mix(vec3(1.0, 0.86, 0.66), vec3(0.92, 0.97, 1.0), step(0.55, bhash1(s * 67.0)));
-      // Glow follows the interior seen through the glass (shelves, back
-      // wall, ceiling) so a lit shop reads as a room, not a white panel.
-      float inside = mix(0.55 + 0.75 * roomLit, 0.3 + 2.2 * dot(glass, vec3(0.3, 0.59, 0.11)), step(fw, 0.35));
-      // Display shelves to head height: rows of goods in packaging colours
-      // with darker shelf edges; brighter ceiling light above.
-      float row = floor(v / 0.42);
-      float goodsHash = bhash(vec2(floor(u / 0.16), row + s * 3.0));
-      vec3 goods = mix(vec3(1.0, 0.92, 0.8), mix(vec3(0.95, 0.45, 0.3), vec3(0.35, 0.6, 0.95), step(0.5, goodsHash)), step(0.55, goodsHash) * 0.6);
-      float edge = 1.0 - 0.6 * (1.0 - aastep(0.06, fract(v / 0.42)));
-      vec3 display = v < 2.3 ? goods * edge * (0.6 + 0.4 * step(0.25, goodsHash)) : vec3(0.6);
-      display = mix(display, vec3(0.8), far);
-      emis += shopC * display * isWin * open * mix(0.09, 0.24, bhash1(s * 71.0 + bx)) * inside * uNight * (1.0 - far * 0.6);
-    }
     // Lantern-lit lattices and shoji in old towns.
     emis += vec3(1.0, 0.62, 0.3) * lattice * 0.05 * uNight * step(0.3, bhash1(s * 41.0));
+  }
+  // Street level: shops are lit inside all day (visible through the glass
+  // by day) and are what actually lights a Japanese street at night.
+  if (shop) {
+    float open = shopOpen;
+    vec3 shopC = mix(vec3(1.0, 0.86, 0.66), vec3(0.92, 0.97, 1.0), step(0.55, bhash1(s * 67.0)));
+    // Glow follows the interior seen through the glass (shelves, back
+    // wall, ceiling) so a lit shop reads as a room, not a white panel.
+    float inside = mix(0.55 + 0.75 * roomLit, 0.3 + 2.2 * dot(glass, vec3(0.3, 0.59, 0.11)), step(fw, 0.35));
+    // Display shelves to head height: rows of goods in packaging colours
+    // with darker shelf edges; brighter ceiling light above.
+    float row = floor(v / 0.42);
+    float goodsHash = bhash(vec2(floor(u / 0.16), row + s * 3.0));
+    vec3 goods = mix(vec3(1.0, 0.92, 0.8), mix(vec3(0.95, 0.45, 0.3), vec3(0.35, 0.6, 0.95), step(0.5, goodsHash)), step(0.55, goodsHash) * 0.6);
+    float edge = 1.0 - 0.6 * (1.0 - aastep(0.06, fract(v / 0.42)));
+    vec3 display = v < 2.3 ? goods * edge * (0.6 + 0.4 * step(0.25, goodsHash)) : vec3(0.6);
+    display = mix(display, vec3(0.8), far);
+    emis += shopC * display * isWin * open * mix(0.09, 0.24, bhash1(s * 71.0 + bx)) * inside * mix(0.6, 1.0, uNight) * (1.0 - far * 0.6);
   }
   o.emissive = emis;
   return o;

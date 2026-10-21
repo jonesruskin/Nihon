@@ -458,7 +458,7 @@ export class RenderPipeline {
     this.lights.update(dt, this.camera, this.night)
     // Sky glow in scene radiance (exposure is applied later): sodium/LED mix,
     // ~3x brighter when low cloud reflects the city back down.
-    const g = this.night * (0.15 + 0.85 * this.lights.urban) * 0.0014 * (1 + this.overcast * 2.5)
+    const g = this.night * (0.2 + 0.6 * this.lights.urban) * 0.0018 * (1 + this.overcast * 2.5)
     const su = this.sanitize.uniforms
     ;(su.get('uGlow')!.value as Vector3).set(g * 1.0, g * 0.78, g * 0.6)
     ;(su.get('uCamPos')!.value as Vector3).copy(this.camera.position)

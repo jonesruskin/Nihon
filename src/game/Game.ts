@@ -546,6 +546,7 @@ export class Game {
       ultra: { far: 120_000, split: 1.8, near: 1800, vfar: 3200, err: 16, pr: 1600 },
     }[q]
     this.traffic.cap = { low: 50, medium: 90, high: 140, ultra: 180 }[q]
+    this.traffic.maxNear = { low: 3, medium: 4, high: 6, ultra: 10 }[q]
     this.plateau.radius = t.pr
     this.plateau.errorTarget = t.err
     this.terrain.settings.farRadius = t.far

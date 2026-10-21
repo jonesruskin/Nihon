@@ -61,7 +61,6 @@ const _m = new Vector3()
 const PER_KM: Record<string, number> = { motorway: 40, trunk: 36, primary: 30, secondary: 20, tertiary: 11, minor: 3, busway: 4, service: 0, track: 0 }
 /** Full models within this distance (a scanned car is 20-40 draw calls); instanced bodies beyond. */
 const NEAR = 55
-const MAX_NEAR = 8
 /** Simulated traffic disc around the player (m). */
 const RADIUS = 195
 /** Cars are recycled once they drive this far from the player. */
@@ -89,6 +88,8 @@ export class Traffic {
   busStops: Array<{ pos: Vector3; name: string }> = []
   density = 1
   time = 0
+  /** Full (scanned) models at once; each costs ~20 draw calls. */
+  maxNear = 6
   private ring: Lane[] = []
   /** Arc-length span [lo, hi] of each ring lane that lies inside the disc. */
   private ringSpan: number[] = []
@@ -299,11 +300,11 @@ export class Traffic {
   /** Swap cars between the full model (near the camera) and the instanced far LOD. */
   private updateLod(): void {
     // Attached models keep theirs a little further out (no flapping at the
-    // edge), but never more than MAX_NEAR at once.
+    // edge), but never more than maxNear at once.
     const near = this.cars
       .filter((c) => c.pos.distanceTo(this.camPos) < (c.model ? NEAR + 15 : NEAR) || c.passengerAboard)
       .sort((a, b) => a.pos.distanceToSquared(this.camPos) - b.pos.distanceToSquared(this.camPos))
-    const keep = new Set(near.slice(0, MAX_NEAR))
+    const keep = new Set(near.slice(0, this.maxNear))
     let loads = 0
     // Shadows from the 5 nearest cars within 28 m only, and never from wheels
     // (each wheel is its own draw call; the body's shadow covers them).

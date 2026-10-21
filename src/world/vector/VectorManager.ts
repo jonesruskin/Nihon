@@ -8,7 +8,6 @@ import {
   LineSegments,
   Matrix4,
   Mesh,
-  Quaternion,
   Vector3,
   type Material,
 } from 'three'
@@ -33,6 +32,7 @@ import {
 } from '../../render/materials/street'
 import { createWaterMaterial } from '../../render/water'
 import { LAMP, type NightLights } from '../../render/NightLights'
+import { PropPool } from './PropPool'
 import {
   createPillarModel,
   createPoleModel,
@@ -52,8 +52,6 @@ const SHOP_CLASSES = new Set(['shop', 'grocery', 'convenience', 'restaurant', 'f
 
 /** Max draw distance (m) per prop type. */
 const PROP_RANGE: Record<string, number> = { pole: 380, light: 550, vending: 200, signal: 380, pillar: 1800, tree: 450, wires: 350, mast: 500, ac: 240, tank: 600, antenna: 300 }
-/** Bucket size (m) per prop type: long-range types get bigger buckets (fewer draw calls). */
-const PROP_CELL: Record<string, number> = { tree: 2400, pillar: 2400, tank: 2400, mast: 1200, light: 800, signal: 800 }
 
 const TILE_URL = (t: TileId) => `https://tiles.openfreemap.org/planet/20261011_080001_pt/${t.z}/${t.x}/${t.y}.pbf`
 const Z = 14
@@ -82,6 +80,9 @@ export class VectorManager {
   /** Tree models by TREE_TYPES index (shared with the forest fill). */
   trees: PropModel[] = []
   private lastCull = 0
+  private pools = new Map<string, PropPool>()
+  private poolAt = new Vector3(Infinity, 0, 0)
+  private lastPool = 0
   private tmp = new Vector3()
   nearRadius = 1500
   farRadius = 2600
@@ -210,7 +211,16 @@ export class VectorManager {
         void this.load(t, w.d)
       }
     }
-    // Distance-cull prop buckets (bounding sphere centre vs camera).
+    // Refill the prop pools after moving (or a world rebase) or a tile change.
+    const moved = this.poolAt.distanceTo(cameraWorld) > 30
+    let dirty = false
+    for (const p of this.pools.values()) dirty ||= p.dirty
+    if ((moved || dirty) && now - this.lastPool > 250) {
+      this.lastPool = now
+      this.poolAt.copy(cameraWorld)
+      for (const p of this.pools.values()) p.refresh(cameraWorld)
+    }
+    // Distance-cull overhead wires (bounding sphere centre vs camera).
     if (now - this.lastCull > 400) {
       this.lastCull = now
       for (const t of this.tiles.values()) {
@@ -325,49 +335,24 @@ export class VectorManager {
       lines.userData.cullRange = PROP_RANGE.wires + 1400
       group.add(lines)
     }
-    // Instanced props
-    const m4 = new Matrix4()
-    const q = new Quaternion()
-    const up = new Vector3(0, 1, 0)
-    const pos = new Vector3()
-    const scl = new Vector3()
-    // Instances are bucketed into cells so each bucket can be frustum- and
-    // distance-culled on its own (thousands of poles per Tokyo tile).
-    const instance = (kind: string, model: PropModel, data: Float32Array, filter: (extra: number) => boolean, scale: (s: number, e: number) => Vector3) => {
-      const CELL = PROP_CELL[kind] ?? 400
-      const buckets = new Map<string, number[]>()
-      for (let i = 0; i < data.length; i += 6) {
-        if (!filter(data[i + 5])) continue
-        const k = `${Math.floor(data[i] / CELL)},${Math.floor(data[i + 2] / CELL)}`
-        let arr = buckets.get(k)
-        if (!arr) buckets.set(k, (arr = []))
-        arr.push(i)
-      }
-      for (const idx of buckets.values()) {
-        const mesh = new InstancedMesh(model.geometry, model.materials, idx.length)
-        idx.forEach((i, k) => {
-          pos.set(data[i], data[i + 1], data[i + 2])
-          q.setFromAxisAngle(up, data[i + 3])
-          scl.copy(scale(data[i + 4], data[i + 5]))
-          mesh.setMatrixAt(k, m4.compose(pos, q, scl))
-        })
-        mesh.castShadow = model.castShadow
-        mesh.receiveShadow = true
-        mesh.computeBoundingSphere()
-        mesh.name = `props:${kind}`
-        mesh.userData.cullRange = PROP_RANGE[kind] ?? 600
-        group.add(mesh)
-      }
+    // Instanced props: registered with the shared pools (one draw per model
+    // for the whole area, refilled around the camera).
+    const one = new Vector3(1, 1, 1)
+    const sv = new Vector3()
+    const instance = (kind: string, model: PropModel, data: Float32Array, filter: (extra: number) => boolean, scale: (s: number, e: number) => Vector3, name = kind) => {
+      let pool = this.pools.get(name)
+      if (!pool) this.pools.set(name, (pool = new PropPool(name, model, PROP_RANGE[kind] ?? 600, this.root)))
+      pool.add(group, data, filter, scale)
     }
     const I = b.instances
-    instance('pole', this.props.pole, I.pole, () => true, () => new Vector3(1, 1, 1))
-    instance('light', this.props.light, I.light, () => true, () => new Vector3(1, 1, 1))
-    instance('vending', this.props.vending, I.vending, () => true, () => new Vector3(1, 1, 1))
-    instance('signal', this.props.signal, I.signal, () => true, () => new Vector3(1, 1, 1))
-    instance('pillar', this.props.pillar, I.pillar, () => true, (s, e) => new Vector3(e, s, 1))
-    if (I.mast) instance('mast', this.props.mast, I.mast, () => true, (s) => new Vector3(1, s / 7, 1))
-    for (const k of ['ac', 'tank', 'antenna'] as const) if (I[k]?.length) instance(k, this.props[k], I[k], () => true, (s) => new Vector3(s, s, s))
-    this.trees.forEach((model, type) => instance('tree', model, I.tree, (e) => Math.round(e) === type, (s) => new Vector3(s, s, s)))
+    instance('pole', this.props.pole, I.pole, () => true, () => one)
+    instance('light', this.props.light, I.light, () => true, () => one)
+    instance('vending', this.props.vending, I.vending, () => true, () => one)
+    instance('signal', this.props.signal, I.signal, () => true, () => one)
+    instance('pillar', this.props.pillar, I.pillar, () => true, (s, e) => sv.set(e, s, 1))
+    if (I.mast) instance('mast', this.props.mast, I.mast, () => true, (s) => sv.set(1, s / 7, 1))
+    for (const k of ['ac', 'tank', 'antenna'] as const) if (I[k]?.length) instance(k, this.props[k], I[k], () => true, (s) => sv.set(s, s, s))
+    this.trees.forEach((model, type) => instance('tree', model, I.tree, (e) => Math.round(e) === type, (s) => sv.set(s, s, s), `tree${type}`))
 
     if (this.lights) {
       // Light sources for the night pool: lamp heads, pole LEDs, vending machines.
@@ -394,6 +379,7 @@ export class VectorManager {
 
   private disposeGroup(group: Group): void {
     this.lights?.unregister(group)
+    for (const p of this.pools.values()) p.remove(group)
     this.world.unanchor(group)
     this.root.remove(group)
     group.traverse((o) => {

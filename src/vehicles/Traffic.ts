@@ -58,7 +58,7 @@ const _up = new Vector3(0, 1, 0)
 const _m = new Vector3()
 
 /** Cars per km of lane at a typical daytime hour (Tokyo-area counts). */
-const PER_KM: Record<string, number> = { motorway: 30, trunk: 26, primary: 22, secondary: 15, tertiary: 9, minor: 3, busway: 4, service: 0, track: 0 }
+const PER_KM: Record<string, number> = { motorway: 40, trunk: 36, primary: 30, secondary: 20, tertiary: 11, minor: 3, busway: 4, service: 0, track: 0 }
 /** Full models within this distance (a scanned car is 20-40 draw calls); instanced bodies beyond. */
 const NEAR = 55
 const MAX_NEAR = 8

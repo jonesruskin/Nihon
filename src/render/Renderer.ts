@@ -56,7 +56,7 @@ import { NightLights } from './NightLights'
 import { LightMeter } from './LightMeter'
 
 /** Median exposed luminance the night eye settles at in very bright spots. */
-const METER_CAP = 0.12
+const METER_CAP = 0.022
 import { DepthType, N8AOPostPass } from 'n8ao'
 
 export type QualityTier = 'low' | 'medium' | 'high' | 'ultra'
@@ -444,7 +444,7 @@ export class RenderPipeline {
     // the measured frame is brighter than the eye keeps comfortable, stop
     // down. Only ever darkens, so dim streets keep the model's exposure.
     let gain = 1
-    if (this.night > 0.3 && this.meter.median > 0) gain = Math.min(1, Math.max(0.7, (this.meterGain * METER_CAP) / this.meter.median))
+    if (this.night > 0.3 && this.meter.median > 0) gain = Math.min(1, Math.max(0.65, (this.meterGain * METER_CAP) / this.meter.median))
     this.meterGain += (gain - this.meterGain) * Math.min(1, dt * 0.5)
     const want = target * (1 + this.overcast * 0.25) * this.meterGain
     this.exposure = this.snapExposure ? want : this.exposure + (want - this.exposure) * Math.min(1, dt * 0.8)

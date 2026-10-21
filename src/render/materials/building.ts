@@ -419,6 +419,13 @@ FacadeSample facade() {
     float fascia = aastep(3.3, v) * (1.0 - aastep(4.05, v));
     float hueF = bhash1(s * 83.0 + floor(u / 9.0));
     vec3 fc = hueF < 0.3 ? vec3(0.92, 0.92, 0.9) : hueF < 0.5 ? vec3(0.75, 0.12, 0.1) : hueF < 0.65 ? vec3(0.1, 0.32, 0.62) : hueF < 0.8 ? vec3(0.95, 0.72, 0.15) : vec3(0.15, 0.45, 0.25);
+    // The shop's name across the middle of its front: a row of glyph blocks.
+    float fv = (v - 3.3) / 0.75;
+    float cu = u / 0.42;
+    float cf = fract(cu);
+    float glyph = step(0.3, bhash(vec2(floor(cu), s * 7.0 + floor(fv * 3.0)))) * aastep(0.12, cf) * (1.0 - aastep(0.88, cf));
+    float txt = aastep(0.22, fv) * (1.0 - aastep(0.78, fv)) * glyph * (1.0 - aastep(0.6, abs(fx - 0.5) * 2.0)) * (1.0 - far);
+    fc = mix(fc, hueF < 0.3 ? vec3(0.1, 0.1, 0.12) : vec3(0.96, 0.95, 0.92), txt);
     albedo = mix(albedo, fc, fascia);
     rough = mix(rough, 0.45, fascia);
     emis += fc * fascia * uNight * 0.22 * (0.25 + 0.75 * shopOpen);
@@ -463,7 +470,10 @@ FacadeSample facade() {
     if (shop) {
       float open = shopOpen;
       vec3 shopC = mix(vec3(1.0, 0.86, 0.66), vec3(0.92, 0.97, 1.0), step(0.55, bhash1(s * 67.0)));
-      emis += shopC * isWin * open * mix(0.12, 0.32, bhash1(s * 71.0 + bx)) * (0.45 + 0.75 * roomLit) * uNight * (1.0 - far * 0.6);
+      // Glow follows the interior seen through the glass (shelves, back
+      // wall, ceiling) so a lit shop reads as a room, not a white panel.
+      float inside = mix(0.55 + 0.75 * roomLit, 0.3 + 2.2 * dot(glass, vec3(0.3, 0.59, 0.11)), step(fw, 0.35));
+      emis += shopC * isWin * open * mix(0.09, 0.24, bhash1(s * 71.0 + bx)) * inside * uNight * (1.0 - far * 0.6);
     }
     // Lantern-lit lattices and shoji in old towns.
     emis += vec3(1.0, 0.62, 0.3) * lattice * 0.05 * uNight * step(0.3, bhash1(s * 41.0));

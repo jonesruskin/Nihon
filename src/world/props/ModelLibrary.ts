@@ -164,6 +164,16 @@ function prepare(root: Object3D, colours: WheelColours): void {
       const s = mat as MeshStandardMaterial
       if (s.map) s.map.colorSpace = SRGBColorSpace
       if (s.emissiveMap) s.emissiveMap.colorSpace = SRGBColorSpace
+      // Transmission makes three.js draw every opaque object a second time
+      // (into a refraction buffer) whenever one is on screen: a bus would
+      // double the frame. Plain alpha-blended glass looks the same here.
+      const ph = mat as MeshPhysicalMaterial
+      if (ph.isMeshPhysicalMaterial && ph.transmission > 0) {
+        ph.transmission = 0
+        ph.transparent = true
+        ph.opacity = Math.min(ph.opacity, 0.35)
+        ph.depthWrite = false
+      }
       const n = mat.name.toLowerCase()
       if (n.includes('glass')) {
         s.transparent = true

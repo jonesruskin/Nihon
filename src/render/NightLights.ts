@@ -24,7 +24,7 @@ interface Spec {
 // is broad and soft-edged rather than a disc under the lamp.
 const SPECS: Spec[] = [
   { intensity: 26, outer: 1.3, inner: 0.55, range: 42, color: new Color(1.0, 0.94, 0.86) }, // LED street lamp
-  { intensity: 12, outer: 1.25, inner: 0.5, range: 26, color: new Color(0.95, 0.97, 1.0) }, // pole security LED
+  { intensity: 15, outer: 1.25, inner: 0.5, range: 26, color: new Color(0.95, 0.97, 1.0) }, // pole security LED
   { intensity: 6, outer: 1.35, inner: 0.6, range: 10, color: new Color(0.92, 0.97, 1.0) }, // vending machine glow
   { intensity: 6, outer: 4, inner: 4, range: 12, color: new Color(1.0, 0.9, 0.76) }, // shop front spill
 ]

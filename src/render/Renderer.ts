@@ -53,6 +53,10 @@ import { CloudsEffect, CLOUD_SHAPE_DETAIL_TEXTURE_SIZE, CLOUD_SHAPE_TEXTURE_SIZE
 import { DataTextureLoader, parseUint8Array, STBNLoader } from '@takram/three-geospatial'
 import type { WorldFrame } from '../core/frame'
 import { NightLights } from './NightLights'
+import { LightMeter } from './LightMeter'
+
+/** Median exposed luminance the night eye settles at in very bright spots. */
+const METER_CAP = 0.022
 import { DepthType, N8AOPostPass } from 'n8ao'
 
 export type QualityTier = 'low' | 'medium' | 'high' | 'ultra'
@@ -144,6 +148,9 @@ export class RenderPipeline {
   private bloom: BloomEffect
   private ao: N8AOPostPass
   private sanitize = new SanitizeEffect()
+  /** Measured brightness of the exposed frame (night eye adaptation). */
+  readonly meter = new LightMeter()
+  meterGain = 1
   readonly lights: NightLights
   /** Fog extinction per metre (0 = clear air beyond the atmosphere model). */
   fogDensity = 0
@@ -217,6 +224,7 @@ export class RenderPipeline {
     if (!debug.has('noclouds')) this.composer.addPass(new EffectPass(this.camera, this.clouds))
     if (!debug.has('noaerial')) this.composer.addPass(new EffectPass(this.camera, this.aerial))
     this.composer.addPass(new EffectPass(this.camera, this.sanitize))
+    this.composer.addPass(this.meter)
     this.composer.addPass(debug.has('nobloom') ? new EffectPass(this.camera, this.toneMapping) : new EffectPass(this.camera, this.bloom, this.toneMapping))
     this.composer.addPass(new EffectPass(this.camera, new SMAAEffect({ preset: SMAAPreset.HIGH })))
 
@@ -429,10 +437,16 @@ export class RenderPipeline {
     // Relative to daylight: the eye opens up ~2x through dusk into night.
     // At night the dark-adapted eye (and every phone camera) sees a lit city
     // street as readable, not black: ~3x daylight exposure in town.
-    const nightEye = (2.2 + 0.2 * this.lights.urban) * (1 - 0.15 * this.lights.glare)
+    const nightEye = 2.2 + 0.2 * this.lights.urban
     const outdoor = (el > 8 ? 1 : el > -6 ? 1 + ((8 - el) / 14) * (nightEye - 1) : nightEye + Math.min(0.4, (-6 - el) / 15)) * this.exposureBias
     const target = outdoor + (Math.max(outdoor, 1.6) - outdoor) * this.indoor
-    const want = target * (1 + this.overcast * 0.25)
+    // Bright spots at night (a crossing full of headlights and screens): when
+    // the measured frame is brighter than the eye keeps comfortable, stop
+    // down. Only ever darkens, so dim streets keep the model's exposure.
+    let gain = 1
+    if (this.night > 0.3 && this.meter.median > 0) gain = Math.min(1, Math.max(0.65, (this.meterGain * METER_CAP) / this.meter.median))
+    this.meterGain += (gain - this.meterGain) * Math.min(1, dt * 0.5)
+    const want = target * (1 + this.overcast * 0.25) * this.meterGain
     this.exposure = this.snapExposure ? want : this.exposure + (want - this.exposure) * Math.min(1, dt * 0.8)
     this.snapExposure = false
     this.sanitize.uniforms.get('uExposure')!.value = this.exposure

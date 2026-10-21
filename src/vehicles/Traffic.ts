@@ -88,6 +88,8 @@ export class Traffic {
   density = 1
   time = 0
   private ring: Lane[] = []
+  /** Arc-length span [lo, hi] of each ring lane that lies inside the disc. */
+  private ringSpan: number[] = []
   private ringTime = -10
   /** Obstacles AI must not hit: the player on foot / the player's car. */
   playerPos: Vector3 | null = null
@@ -154,6 +156,7 @@ export class Traffic {
       return { key: t.key, paths: t.build.paths, matrix: t.group.matrixWorld }
     })
     this.graph.rebuild(input)
+    this.ring = [] // the old lanes are gone: rebuild the spawn ring next tick
     this.busStops = []
     for (const t of tiles)
       for (const p of t.build.pois)
@@ -190,20 +193,36 @@ export class Traffic {
     if (this.time - this.ringTime > 3 || !this.ring.length) {
       this.ringTime = this.time
       this.ring = []
+      this.ringSpan = []
       this.ringWeights = []
       this.ringTotal = 0
       let km = 0
       for (const l of this.graph.lanes) {
         if (l.length < 20) continue
-        const mid = l.pts[Math.floor(l.pts.length / 2)]
-        const d = mid.distanceTo(center)
-        if (d > RADIUS) continue
-        const real = (PER_KM[l.cls] ?? 2) * l.lanes * (l.length / 1000)
-        if (real <= 0) continue
+        const perKm = (PER_KM[l.cls] ?? 2) * l.lanes
+        if (perKm <= 0) continue
+        // Only the part of the lane inside the disc counts: a long arterial
+        // crossing it carries traffic even when its midpoint lies outside.
+        let inside = 0
+        let dMin = Infinity
+        let sLo = Infinity
+        let sHi = 0
+        for (let i = 1; i < l.pts.length; i++) {
+          _m.addVectors(l.pts[i - 1], l.pts[i]).multiplyScalar(0.5)
+          const d = _m.distanceTo(center)
+          if (d > RADIUS) continue
+          inside += l.cum[i] - l.cum[i - 1]
+          dMin = Math.min(dMin, d)
+          sLo = Math.min(sLo, l.cum[i - 1])
+          sHi = Math.max(sHi, l.cum[i])
+        }
+        if (inside < 10) continue
+        const real = perKm * (inside / 1000)
         km += real
         // Denser toward the player, where it's seen; thinner at the edge.
-        const w = real * (1.5 - d / RADIUS)
+        const w = real * (1.5 - dMin / RADIUS)
         this.ring.push(l)
+        this.ringSpan.push(sLo, sHi)
         this.ringTotal += w
         this.ringWeights.push(this.ringTotal)
       }
@@ -225,7 +244,7 @@ export class Traffic {
         else hi = m
       }
       const lane = this.ring[lo]
-      const s = Math.random() * lane.length
+      const s = this.ringSpan[lo * 2] + Math.random() * (this.ringSpan[lo * 2 + 1] - this.ringSpan[lo * 2])
       const p = new Vector3()
       const t = new Vector3()
       this.graph.sample(lane, s, p, t)

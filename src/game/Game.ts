@@ -1784,7 +1784,7 @@ export class Game {
           let top: Object3D = obj
           while (top.parent && top.parent.type !== 'Scene') top = top.parent
           const pass = (mat as { isMeshDepthMaterial?: boolean }).isMeshDepthMaterial || (mat as { isMeshDistanceMaterial?: boolean }).isMeshDistanceMaterial ? 'shadow' : obj.type === 'Mesh' && !top.parent ? 'post' : 'main'
-          const k = `${pass}:${top.name || top.type}/${obj.name.replace(/[:\d].*$/, '') || obj.type}`
+          const k = `${pass}:${top.name || top.type}/${obj.name.replace(/\d.*$/, '') || obj.type}`
           by[k] = (by[k] ?? 0) + 1
           return orig.call(this, cam, scene, geo, mat, obj, group)
         }
@@ -1834,7 +1834,7 @@ export class Game {
       const tris = ((g.index ? g.index.count : g.attributes.position.count) / 3) * ((m as InstancedMesh).isInstancedMesh ? (m as InstancedMesh).count : 1)
       let top: Object3D = m
       while (top.parent && top.parent !== this.pipeline.scene) top = top.parent
-      const k = `${top.name || top.type}/${m.name.replace(/[:\d].*$/, '') || m.type}`
+      const k = `${top.name || top.type}/${m.name.replace(/\d.*$/, '') || m.type}`
       const e = (out[k] ??= [0, 0])
       e[0] += Array.isArray(m.material) ? m.material.length : 1
       e[1] += tris

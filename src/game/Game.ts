@@ -1789,14 +1789,25 @@ export class Game {
           return orig.call(this, cam, scene, geo, mat, obj, group)
         }
         // Two frames: shadows are redrawn every other frame, so this is the
-        // true per-frame average.
-        requestAnimationFrame(() => requestAnimationFrame(() => {
+        // true per-frame average. Count the frames actually drawn (a slow
+        // frame can fit two renders between animation callbacks).
+        let frames = 0
+        const pipe = this.pipeline
+        const render = pipe.render
+        pipe.render = function (dt: number) {
+          frames++
+          return render.call(this, dt)
+        }
+        const finish = () => {
+          if (frames < 2) return void requestAnimationFrame(finish)
+          pipe.render = render
           r.renderBufferDirect = orig
-          const calls = Math.round(r.info.render.calls / 2)
-          const triangles = Math.round(r.info.render.triangles / 2)
-          const lines = Math.round(r.info.render.lines / 2)
+          const F = frames
+          const calls = Math.round(r.info.render.calls / F)
+          const triangles = Math.round(r.info.render.triangles / F)
+          const lines = Math.round(r.info.render.lines / F)
           r.info.autoReset = true
-          const top = Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 24).map(([k, v]) => `${Math.round(v / 2)} ${k}`).join(', ')
+          const top = Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 24).map(([k, v]) => `${Math.round(v / F)} ${k}`).join(', ')
           let lights = 0
           let casters = 0
           let casterTris = 0
@@ -1811,7 +1822,8 @@ export class Game {
             }
           })
           done({ calls, triangles, lines, programs: r.info.programs?.length ?? 0, textures: r.info.memory.textures, lights, casters, casterTris: Math.round(casterTris), quality: this.params.quality, scale: this.governor.scale, lamps: lampUniforms.uLampCount.value, top })
-        }))
+        }
+        requestAnimationFrame(finish)
       })
     })
   }

@@ -64,6 +64,8 @@ const NEAR = 55
 const MAX_NEAR = 8
 /** Simulated traffic disc around the player (m). */
 const RADIUS = 195
+/** Cars are recycled once they drive this far from the player. */
+const KEEP = RADIUS + 60
 
 const MIX: Array<[string, number]> = [
   ['kei_car', 0.28],
@@ -186,7 +188,7 @@ export class Traffic {
   private maintain(center: Vector3): void {
     // Traffic is simulated where it can be seen: a disc around the player,
     // recycled as cars leave it (the far LOD makes the edge invisible).
-    for (const c of [...this.cars]) if (c.pos.distanceTo(center) > RADIUS + 60 && !c.passengerAboard && !c.hailed) this.remove(c)
+    for (const c of [...this.cars]) if (c.pos.distanceTo(center) > KEEP && !c.passengerAboard && !c.hailed) this.remove(c)
     if (!this.graph.lanes.length) return
     // Lanes through the spawn ring, weighted by how much traffic they carry
     // (refreshed every few seconds): arterials fill up, side streets don't.
@@ -204,21 +206,26 @@ export class Traffic {
         // Only the part of the lane inside the disc counts: a long arterial
         // crossing it carries traffic even when its midpoint lies outside.
         let inside = 0
+        let kept = 0
         let dMin = Infinity
         let sLo = Infinity
         let sHi = 0
         for (let i = 1; i < l.pts.length; i++) {
           _m.addVectors(l.pts[i - 1], l.pts[i]).multiplyScalar(0.5)
           const d = _m.distanceTo(center)
+          if (d > KEEP) continue
+          kept += l.cum[i] - l.cum[i - 1]
           if (d > RADIUS) continue
           inside += l.cum[i] - l.cum[i - 1]
           dMin = Math.min(dMin, d)
           sLo = Math.min(sLo, l.cum[i - 1])
           sHi = Math.max(sHi, l.cum[i])
         }
+        // Cars live out to KEEP (they drive on past the spawn disc before
+        // being recycled), so the density target counts that whole disc.
+        km += perKm * (kept / 1000)
         if (inside < 10) continue
         const real = perKm * (inside / 1000)
-        km += real
         // Denser toward the player, where it's seen; thinner at the edge.
         const w = real * (1.5 - dMin / RADIUS)
         this.ring.push(l)

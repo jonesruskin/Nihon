@@ -6,10 +6,22 @@ import { createGltfLoader } from '../../core/gltf'
 
 const BASE = `${import.meta.env.BASE_URL}models/objs/`
 
+/** Material name -> linear RGB. */
+type WheelColours = Record<string, [number, number, number]>
+
 export class ModelLibrary {
   private loader = createGltfLoader()
   private cache = new Map<string, Promise<Object3D>>()
   private ready = new Map<string, Object3D>()
+  private wheels: Promise<Record<string, WheelColours>> | null = null
+
+  /** Average colours of textured wheel materials (scripts/wheel-colors.mjs). */
+  private wheelColours(): Promise<Record<string, WheelColours>> {
+    this.wheels ??= fetch(`${BASE}wheels.json`)
+      .then((r) => (r.ok ? r.json() : {}))
+      .catch(() => ({}))
+    return this.wheels
+  }
 
   load(id: string): Promise<Object3D> {
     let p = this.cache.get(id)
@@ -24,8 +36,8 @@ export class ModelLibrary {
           return attempt(n + 1)
         }
       }
-      p = attempt(1).then((scene) => {
-        prepare(scene)
+      p = Promise.all([attempt(1), this.wheelColours()]).then(([scene, wheels]) => {
+        prepare(scene, wheels[id] ?? {})
         this.ready.set(id, scene)
         return scene
       })
@@ -56,37 +68,40 @@ export class ModelLibrary {
  * twice with shadows). Merge everything that doesn't move into one mesh per
  * material; wheels (wheel_*) stay separate so they can spin.
  */
-function mergeStatic(root: Object3D): void {
+function mergeStatic(root: Object3D, colours: WheelColours): void {
   // Each wheel is merged on its own (it spins as one); everything else together.
   const wheelOf = (o: Object3D | null): Object3D | null => (!o ? null : /^wheel_/i.test(o.name) ? o : wheelOf(o.parent))
   const wheels: Object3D[] = []
   root.traverse((o) => /^wheel_/i.test(o.name) && wheels.push(o))
-  for (const w of wheels) if (!mergeColoured(w)) mergeInto(w)
+  for (const w of wheels) {
+    mergeColoured(w, colours)
+    mergeInto(w)
+  }
   mergeInto(root, (m) => wheelOf(m) === null)
 }
 
 /**
- * A wheel is tyre, rim, hub and brake as separate untextured materials (four
- * or five draw calls). Bake each part's colour into vertex colours and draw it
- * as one mesh. Returns false (nothing changed) if any part is textured or
- * see-through.
+ * A wheel is tyre, rim, hub and brake as separate materials (three to five
+ * draw calls). Bake each part's colour (a textured part's average colour from
+ * `colours`) into vertex colours and draw them as one mesh. Paint (recoloured
+ * per car), glass and parts without a known colour stay as they are.
  */
-function mergeColoured(root: Object3D): boolean {
+function mergeColoured(root: Object3D, colours: WheelColours): void {
   root.updateMatrixWorld(true)
   const inv = new Matrix4().copy(root.matrixWorld).invert()
-  const parts: Mesh[] = []
-  let ok = true
+  const parts: Array<{ m: Mesh; c: [number, number, number] }> = []
   root.traverse((o) => {
     const m = o as Mesh
-    if (o === root || !m.isMesh) return
+    if (o === root || !m.isMesh || Array.isArray(m.material)) return
     const mat = m.material as MeshStandardMaterial
-    if (Array.isArray(m.material) || !mat.isMeshStandardMaterial || mat.map || mat.transparent) ok = false
-    parts.push(m)
+    if (!mat.isMeshStandardMaterial || mat.transparent || mat.alphaTest > 0 || /body|paint/i.test(mat.name)) return
+    const c = mat.map ? colours[mat.name] : ([mat.color.r, mat.color.g, mat.color.b] as [number, number, number])
+    if (c) parts.push({ m, c })
   })
-  if (!ok || parts.length < 2) return false
+  if (parts.length < 2) return
   let rough = 0
   let metal = 0
-  const geos = parts.map((m) => {
+  const geos = parts.map(({ m, c }) => {
     const mat = m.material as MeshStandardMaterial
     rough += mat.roughness
     metal += mat.metalness
@@ -95,18 +110,17 @@ function mergeColoured(root: Object3D): boolean {
     if (!g.attributes.normal) g.computeVertexNormals()
     const n = g.attributes.position.count
     const col = new Float32Array(n * 3)
-    for (let i = 0; i < n; i++) col.set([mat.color.r, mat.color.g, mat.color.b], i * 3)
+    for (let i = 0; i < n; i++) col.set(c, i * 3)
     g.setAttribute('color', new BufferAttribute(col, 3))
     g.morphAttributes = {}
     return g
   })
   const merged = mergeGeometries(geos)
-  if (!merged) return false
-  for (const m of parts) m.removeFromParent()
+  if (!merged) return
+  for (const { m } of parts) m.removeFromParent()
   const mesh = new Mesh(merged, new MeshStandardMaterial({ vertexColors: true, roughness: rough / parts.length, metalness: metal / parts.length }))
   mesh.name = 'merged:wheel'
   root.add(mesh)
-  return true
 }
 
 export function mergeInto(root: Object3D, accept: (m: Mesh) => boolean = () => true): void {
@@ -138,8 +152,8 @@ export function mergeInto(root: Object3D, accept: (m: Mesh) => boolean = () => t
   }
 }
 
-function prepare(root: Object3D): void {
-  mergeStatic(root)
+function prepare(root: Object3D, colours: WheelColours): void {
+  mergeStatic(root, colours)
   root.traverse((o) => {
     const m = o as Mesh
     if (!m.isMesh) return

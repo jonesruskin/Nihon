@@ -181,6 +181,9 @@ export class Game {
   private loggedTerrain = false
   private warmFrames = 0
   private dressTimer = 4
+  private nightlifeTimer = 0
+  /** 0 quiet streets .. 1 a nightlife district (bars, karaoke, clubs nearby). */
+  private nightlife = 0
   mode: Mode = 'loading'
   private last = performance.now()
   private elapsed = 0
@@ -1140,6 +1143,18 @@ export class Game {
     updateWater(this.elapsed)
     buildingUniforms.uNight.value = night
     buildingUniforms.uTime.value = this.elapsed
+    // Shops by the clock: shotengai shutters come down in the evening, while
+    // nightlife districts (dense, bright cores) stay open late.
+    {
+      const h = this.clock.jst.hourFloat
+      const base = h < 6 ? 0.12 : h < 9 ? 0.35 : h < 10 ? 0.6 : h < 19 ? 0.85 : h < 20 ? 0.7 : h < 22 ? 0.42 : 0.25
+      const late = h >= 17 || h < 3 ? 0.78 : base
+      if ((this.nightlifeTimer -= dt) < 0) {
+        this.nightlifeTimer = 3
+        this.nightlife = Math.min(1, this.vector.nightlifeNear(focus, 400) / 30)
+      }
+      buildingUniforms.uShopOpen.value = base + Math.max(0, late - base) * this.nightlife
+    }
     // Dynamic resolution, then quality tier, to hold the display's refresh
     // rate (90 FPS on fast screens). An explicit ?quality= pins the tier.
     if (this.mode !== 'loading' && !this.hud.veiled && this.elapsed > 4 && !this.bench) {

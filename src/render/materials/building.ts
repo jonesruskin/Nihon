@@ -13,6 +13,7 @@ export interface BuildingUniforms {
   uWet: IUniform<number> // rain wetness 0..1
   uSnow: IUniform<number> // snow cover on roofs 0..1
   uTime: IUniform<number>
+  uShopOpen: IUniform<number> // share of shops open at this hour 0..1
 }
 
 export const buildingUniforms: BuildingUniforms = {
@@ -20,6 +21,7 @@ export const buildingUniforms: BuildingUniforms = {
   uWet: { value: 0 },
   uSnow: { value: 0 },
   uTime: { value: 0 },
+  uShopOpen: { value: 0.85 },
 }
 
 const common = /* glsl */ `
@@ -27,6 +29,7 @@ uniform float uNight;
 uniform float uWet;
 uniform float uSnow;
 uniform float uTime;
+uniform float uShopOpen;
 varying vec3 vWPos;
 varying vec3 vWNrm;
 varying float vBh;
@@ -197,6 +200,8 @@ FacadeSample facade() {
   bool vernacular = kind >= 7.5; // machiya, farmhouse, shrine, Ryukyu
   bool shop = !plain && !vernacular && (commercial || (!house && !glassTower && !industrial && !apartment && !wood && bhash1(s * 23.0) > 0.25)) && v < 4.2;
   if (shop) { isWin = (1.0 - aastep(0.92, abs(fx - 0.5) * 2.0)) * aastep(0.08, v) * (1.0 - aastep(3.3, v)); }
+  // Opening hours: closed shops pull down their roller shutters (シャッター).
+  float shopOpen = shop ? step(bhash1(s * 61.0 + bx * 0.13), uShopOpen) : 1.0;
   if (industrial) isWin *= aastep(0.6, fy) * (1.0 - aastep(0.85, fy)) * step(0.5, bhash1(bx + s));
   float band = (!house && !glassTower && !apartment) ? aastep(0.9, fy) * 0.12 : 0.0;
 
@@ -260,6 +265,13 @@ FacadeSample facade() {
   }
   vec3 albedo = mix(wall * (1.0 - band), glass, isWin);
   albedo = mix(albedo, vec3(0.7, 0.71, 0.72), frame * isWin);
+  if (shop && shopOpen < 0.5) {
+    // Corrugated steel shutter: ribs every ~8 cm, a bottom rail, grime low down.
+    float rib = 0.86 + 0.14 * smoothstep(0.3, 0.5, abs(fract(v * 12.0) - 0.5) * 2.0);
+    vec3 shutter = mix(vec3(0.5, 0.52, 0.52), vec3(0.62, 0.62, 0.6), bhash1(s * 53.0 + bx)) * rib * mix(0.75, 1.0, smoothstep(0.0, 0.8, v));
+    albedo = mix(albedo, shutter, isWin);
+    isWin = 0.0;
+  }
   float rough = mix(mix(0.82, 0.35, uWet), mix(0.06, 0.4, frame), isWin);
   float metal = isWin * (glassTower ? 0.55 : mix(0.18, 0.6, frame));
   vec3 emis = vec3(0.0);
@@ -409,7 +421,7 @@ FacadeSample facade() {
     vec3 fc = hueF < 0.3 ? vec3(0.92, 0.92, 0.9) : hueF < 0.5 ? vec3(0.75, 0.12, 0.1) : hueF < 0.65 ? vec3(0.1, 0.32, 0.62) : hueF < 0.8 ? vec3(0.95, 0.72, 0.15) : vec3(0.15, 0.45, 0.25);
     albedo = mix(albedo, fc, fascia);
     rough = mix(rough, 0.45, fascia);
-    emis += fc * fascia * uNight * 0.22;
+    emis += fc * fascia * uNight * 0.22 * (0.25 + 0.75 * shopOpen);
   }
   // Contact shading: walls darken toward the street where sky light is
   // blocked by the ground, kerb and neighbours (cheap baked AO).
@@ -449,9 +461,9 @@ FacadeSample facade() {
     // Street level: shop fronts, konbini and restaurants stay lit into the
     // night and are what actually lights a Japanese street.
     if (shop) {
-      float open = step(0.2, bhash1(s * 61.0 + bx * 0.13));
+      float open = shopOpen;
       vec3 shopC = mix(vec3(1.0, 0.86, 0.66), vec3(0.92, 0.97, 1.0), step(0.55, bhash1(s * 67.0)));
-      emis += shopC * isWin * open * mix(0.16, 0.42, bhash1(s * 71.0 + bx)) * (0.45 + 0.75 * roomLit) * uNight * (1.0 - far * 0.6);
+      emis += shopC * isWin * open * mix(0.12, 0.32, bhash1(s * 71.0 + bx)) * (0.45 + 0.75 * roomLit) * uNight * (1.0 - far * 0.6);
     }
     // Lantern-lit lattices and shoji in old towns.
     emis += vec3(1.0, 0.62, 0.3) * lattice * 0.05 * uNight * step(0.3, bhash1(s * 41.0));

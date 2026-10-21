@@ -50,6 +50,9 @@ import {
 /** OSM POI classes that are lit, open-fronted businesses at night. */
 const SHOP_CLASSES = new Set(['shop', 'grocery', 'convenience', 'restaurant', 'fast_food', 'cafe', 'bar', 'beer', 'clothing_store', 'bakery', 'pharmacy', 'alcohol_shop', 'ice_cream', 'hairdresser', 'laundry', 'mobile_phone', 'books', 'bank', 'karaoke', 'cinema', 'theatre', 'entertainment', 'pub', 'nightclub'])
 
+/** POI classes that keep a district open and lit late into the night. */
+const NIGHTLIFE = new Set(['bar', 'beer', 'pub', 'nightclub', 'karaoke', 'entertainment'])
+
 /** Max draw distance (m) per prop type. */
 const PROP_RANGE: Record<string, number> = { pole: 380, light: 550, vending: 200, signal: 380, pillar: 1800, tree: 450, wires: 350, mast: 500, ac: 240, tank: 600, antenna: 300 }
 
@@ -171,6 +174,20 @@ export class VectorManager {
     const t = this.tiles.get(key)
     if (!t?.build || !t.group) return null
     return { paths: t.build.paths, matrix: t.group.matrix }
+  }
+
+  /** Bars, izakaya, karaoke and clubs within `r` metres of `world`. */
+  nightlifeNear(world: Vector3, r: number): number {
+    let n = 0
+    const p = new Vector3()
+    for (const t of this.tiles.values()) {
+      if (!t.group || !t.build) continue
+      for (const q of t.build.pois) {
+        if (!NIGHTLIFE.has(q.cls)) continue
+        if (p.set(q.x, q.y, q.z).applyMatrix4(t.group.matrixWorld).distanceTo(world) < r) n++
+      }
+    }
+    return n
   }
 
   get readyTiles(): Array<{ key: string; build: TileBuild; group: Group }> {

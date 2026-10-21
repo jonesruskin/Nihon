@@ -429,7 +429,7 @@ export class RenderPipeline {
     // Relative to daylight: the eye opens up ~2x through dusk into night.
     // At night the dark-adapted eye (and every phone camera) sees a lit city
     // street as readable, not black: ~3x daylight exposure in town.
-    const nightEye = 2.2 + 0.4 * this.lights.urban
+    const nightEye = 2.2 + 0.2 * this.lights.urban
     const outdoor = (el > 8 ? 1 : el > -6 ? 1 + ((8 - el) / 14) * (nightEye - 1) : nightEye + Math.min(0.4, (-6 - el) / 15)) * this.exposureBias
     const target = outdoor + (Math.max(outdoor, 1.6) - outdoor) * this.indoor
     const want = target * (1 + this.overcast * 0.25)
@@ -458,7 +458,7 @@ export class RenderPipeline {
     this.lights.update(dt, this.camera, this.night)
     // Sky glow in scene radiance (exposure is applied later): sodium/LED mix,
     // ~3x brighter when low cloud reflects the city back down.
-    const g = this.night * (0.15 + 0.85 * this.lights.urban) * 0.0018 * (1 + this.overcast * 2.5)
+    const g = this.night * (0.15 + 0.85 * this.lights.urban) * 0.0014 * (1 + this.overcast * 2.5)
     const su = this.sanitize.uniforms
     ;(su.get('uGlow')!.value as Vector3).set(g * 1.0, g * 0.78, g * 0.6)
     ;(su.get('uCamPos')!.value as Vector3).copy(this.camera.position)

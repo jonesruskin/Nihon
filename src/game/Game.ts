@@ -1796,10 +1796,11 @@ export class Game {
         // Attribute every draw call of the next frame to what issued it.
         const by: Record<string, number> = {}
         const orig = r.renderBufferDirect
+        const mainCam = this.pipeline.camera
         r.renderBufferDirect = function (cam, scene, geo, mat, obj, group) {
           let top: Object3D = obj
           while (top.parent && top.parent.type !== 'Scene') top = top.parent
-          const pass = (mat as { isMeshDepthMaterial?: boolean }).isMeshDepthMaterial || (mat as { isMeshDistanceMaterial?: boolean }).isMeshDistanceMaterial ? 'shadow' : obj.type === 'Mesh' && !top.parent ? 'post' : 'main'
+          const pass = (mat as { isMeshDepthMaterial?: boolean }).isMeshDepthMaterial || (mat as { isMeshDistanceMaterial?: boolean }).isMeshDistanceMaterial ? 'shadow' : obj.type === 'Mesh' && !top.parent ? 'post' : cam === mainCam ? 'main' : `cam(${cam.type}${cam.name ? ' ' + cam.name : ''})`
           const k = `${pass}:${top.name || top.type}/${obj.name.replace(/\d.*$/, '') || obj.type}`
           by[k] = (by[k] ?? 0) + 1
           return orig.call(this, cam, scene, geo, mat, obj, group)

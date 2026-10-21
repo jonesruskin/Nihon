@@ -70,9 +70,6 @@ export class NightLights {
   readonly dynamic: DynamicLamp[] = []
   /** 0 = countryside, 1 = dense city: drives sky glow and ambient fill. */
   urban = 0
-  /** 0..1: lamps close around the viewer (drives eye adaptation). */
-  glare = 0
-  lampLoad = 0
   /** QA/tuning multiplier on the ambient city fill. */
   fillScale = 1
 
@@ -120,14 +117,6 @@ export class NightLights {
     this.picked = all.slice(0, MAX_LAMPS)
     // ~120 lamps within 300 m is a lit urban street grid.
     this.urban = Math.min(1, near / 120)
-    // How much lamp light is right around the viewer (a crossing ringed by
-    // street lights and shop fronts): the eye stops down there.
-    let load = 0
-    // Weighted by how bright each kind is: street lamps count fully, pole
-    // LEDs half, shop spill and vending machines a quarter.
-    for (const r of this.picked) load += (15 / Math.max(r.d, 15)) ** 2 * (r.kind === LAMP.street ? 1 : r.kind === LAMP.pole ? 0.5 : 0.25)
-    this.lampLoad = load
-    this.glare = Math.min(1, Math.max(0, (load - 4) / 8))
   }
 
   update(dt: number, camera: Camera, night: number, now = performance.now()): void {

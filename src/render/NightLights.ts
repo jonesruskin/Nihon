@@ -125,7 +125,7 @@ export class NightLights {
     let load = 0
     for (const r of this.picked) load += (15 / Math.max(r.d, 15)) ** 2
     this.lampLoad = load
-    this.glare = Math.min(1, Math.max(0, (load - 6) / 10))
+    this.glare = Math.min(1, Math.max(0, (load - 4) / 8))
   }
 
   update(dt: number, camera: Camera, night: number, now = performance.now()): void {

@@ -123,7 +123,9 @@ export class NightLights {
     // How much lamp light is right around the viewer (a crossing ringed by
     // street lights and shop fronts): the eye stops down there.
     let load = 0
-    for (const r of this.picked) load += (15 / Math.max(r.d, 15)) ** 2
+    // Weighted by how bright each kind is: street lamps count fully, pole
+    // LEDs half, shop spill and vending machines a quarter.
+    for (const r of this.picked) load += (15 / Math.max(r.d, 15)) ** 2 * (r.kind === LAMP.street ? 1 : r.kind === LAMP.pole ? 0.5 : 0.25)
     this.lampLoad = load
     this.glare = Math.min(1, Math.max(0, (load - 4) / 8))
   }

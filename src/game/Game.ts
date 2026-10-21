@@ -1876,6 +1876,7 @@ export class Game {
     return {
       fps: Math.round(this.fps),
       gameTime: Math.round(this.elapsed * 10) / 10,
+      lampLoad: Math.round(this.pipeline.lights.lampLoad * 10) / 10,
       cpuMs: Math.round(this.cpuFrame * 10) / 10,
       cpuRenderMs: Math.round(this.cpuRender * 10) / 10,
       cpuPeakMs: Math.round(this.cpuPeak * 10) / 10,

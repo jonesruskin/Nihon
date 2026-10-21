@@ -489,7 +489,7 @@ FacadeSample facade() {
       float goodsHash = bhash(vec2(floor(u / 0.16), row + s * 3.0));
       vec3 goods = mix(vec3(1.0, 0.92, 0.8), mix(vec3(0.95, 0.45, 0.3), vec3(0.35, 0.6, 0.95), step(0.5, goodsHash)), step(0.55, goodsHash) * 0.6);
       float edge = 1.0 - 0.6 * (1.0 - aastep(0.06, fract(v / 0.42)));
-      vec3 display = v < 1.9 ? goods * edge * (0.6 + 0.4 * step(0.25, goodsHash)) : vec3(1.0);
+      vec3 display = v < 2.3 ? goods * edge * (0.6 + 0.4 * step(0.25, goodsHash)) : vec3(0.6);
       display = mix(display, vec3(0.8), far);
       emis += shopC * display * isWin * open * mix(0.09, 0.24, bhash1(s * 71.0 + bx)) * inside * uNight * (1.0 - far * 0.6);
     }

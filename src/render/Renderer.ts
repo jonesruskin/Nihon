@@ -429,7 +429,7 @@ export class RenderPipeline {
     // Relative to daylight: the eye opens up ~2x through dusk into night.
     // At night the dark-adapted eye (and every phone camera) sees a lit city
     // street as readable, not black: ~3x daylight exposure in town.
-    const nightEye = 2.2 + 0.2 * this.lights.urban
+    const nightEye = (2.2 + 0.2 * this.lights.urban) * (1 - 0.15 * this.lights.glare)
     const outdoor = (el > 8 ? 1 : el > -6 ? 1 + ((8 - el) / 14) * (nightEye - 1) : nightEye + Math.min(0.4, (-6 - el) / 15)) * this.exposureBias
     const target = outdoor + (Math.max(outdoor, 1.6) - outdoor) * this.indoor
     const want = target * (1 + this.overcast * 0.25)

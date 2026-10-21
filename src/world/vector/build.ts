@@ -63,11 +63,15 @@ export interface WoodArea {
   mountain: boolean
 }
 
+/** Building cell size (m) in near tiles. */
+const CELL = 700
+
 export interface TileBuild {
   id: TileId
   anchor: { lat: number; lon: number }
-  buildings: MeshData | null
-  roofs: MeshData | null
+  /** Walls and roofs in ~700 m cells (near tiles), so each can be frustum- and shadow-culled. */
+  buildings: MeshData[]
+  roofs: MeshData[]
   roads: MeshData | null
   sidewalks: MeshData | null
   ballast: MeshData | null
@@ -140,6 +144,9 @@ export function buildTile(req: BuildRequest): TileBuild {
     pillar: [],
     signal: [],
     mast: [],
+    ac: [],
+    tank: [],
+    antenna: [],
   }
   const wires: number[] = []
   const pois: Poi[] = []
@@ -857,8 +864,15 @@ export function buildTile(req: BuildRequest): TileBuild {
   }
 
   // ------------------------------------------------------------- buildings
-  const buildings = new MeshBuilder(false, { bh: 1, seed: 1, kind: 1 })
-  const roofs = new MeshBuilder(true, { seed: 1 })
+  const cells = new Map<string, { buildings: MeshBuilder; roofs: MeshBuilder }>()
+  // Near tiles split into cells (culling, shadows); far ones stay one draw.
+  const cell = req.detail >= 1 ? CELL : 1e6
+  const cellAt = (x: number, z: number) => {
+    const k = `${Math.floor(x / cell)},${Math.floor(z / cell)}`
+    let c = cells.get(k)
+    if (!c) cells.set(k, (c = { buildings: new MeshBuilder(false, { bh: 1, seed: 1, kind: 1, wall: 2 }), roofs: new MeshBuilder(true, { seed: 1 }) }))
+    return c
+  }
   const bl = tile.layers.building
   let skipped = 0
   if (bl) {
@@ -884,6 +898,7 @@ export function buildTile(req: BuildRequest): TileBuild {
           continue
         }
         if (area < 6) continue
+        const { buildings, roofs } = cellAt(c[0], c[1])
         const seed = hash2(Math.round(c[0] * 10), Math.round(c[1] * 10))
         const gs = outer.map((p) => ground(p[0], p[1]))
         const gmin = Math.min(...gs)
@@ -959,10 +974,12 @@ export function buildTile(req: BuildRequest): TileBuild {
             const b1 = V(b[0], b[1], wallTop)
             const ga = ground(a[0], a[1])
             const gb = ground(b[0], b[1])
-            const v0 = buildings.vertex(a0[0], a0[1], a0[2], nx, 0, -ny, 0, 0, base - ga, seed, kind)
-            const v1 = buildings.vertex(b0[0], b0[1], b0[2], nx, 0, -ny, 0, 0, base - gb, seed, kind)
-            const v2 = buildings.vertex(b1[0], b1[1], b1[2], nx, 0, -ny, 0, 0, wallTop - gb, seed, kind)
-            const v3 = buildings.vertex(a1[0], a1[1], a1[2], nx, 0, -ny, 0, 0, wallTop - ga, seed, kind)
+            // wall = (metres along this wall, its length): windows fit each
+            // wall exactly instead of being cut at the corners.
+            const v0 = buildings.vertex(a0[0], a0[1], a0[2], nx, 0, -ny, 0, 0, base - ga, seed, kind, 0, len)
+            const v1 = buildings.vertex(b0[0], b0[1], b0[2], nx, 0, -ny, 0, 0, base - gb, seed, kind, len, len)
+            const v2 = buildings.vertex(b1[0], b1[1], b1[2], nx, 0, -ny, 0, 0, wallTop - gb, seed, kind, len, len)
+            const v3 = buildings.vertex(a1[0], a1[1], a1[2], nx, 0, -ny, 0, 0, wallTop - ga, seed, kind, 0, len)
             buildings.quad(v0, v1, v2, v3)
           }
         }
@@ -983,9 +1000,100 @@ export function buildTile(req: BuildRequest): TileBuild {
             buildings.vertex(v[0], v[1], v[2], 0, 1, 0, 0, 0, wallTop - gmin, seed, kind)
           }
           for (let k = 0; k < tri.length; k += 3) buildings.triUp(b0 + tri[k], b0 + tri[k + 1], b0 + tri[k + 2])
+          if (!vernacular) rooftop(buildings, outer, wallTop, wallTop - gmin, area, kind, seed)
+        }
+        // TV aerials: still on most Japanese house roofs.
+        if (pitched && kind === 1 && seed < 0.45) {
+          const v = V(obb!.cx + obb!.ax * obb!.halfLong * 0.4, obb!.cy + obb!.ay * obb!.halfLong * 0.4, wallTop + roofH * 0.95)
+          instances.antenna.push(v[0], v[1], v[2], Math.atan2(obb!.ax, obb!.ay) + seed * 2, 0.9 + seed * 0.4, 0)
         }
       }
     }
+  }
+
+  /**
+   * What sits on a Japanese flat roof: a parapet, the stair/elevator house
+   * (塔屋), rows of air-conditioner outdoor units and, on apartment blocks, a
+   * water tank. These break the flat-box silhouette more than anything else.
+   */
+  function rooftop(b: MeshBuilder, ring: P2[], top: number, tall: number, area: number, kind: number, seed: number): void {
+    if (tall < 5 || area < 40) return
+    // Parapet: 0.6-1.1 m, both faces (seen from neighbouring roofs).
+    const ph = 0.6 + seed * 0.5
+    for (let k = 0; k < ring.length; k++) {
+      const a = ring[k]
+      const c = ring[(k + 1) % ring.length]
+      const dx = c[0] - a[0]
+      const dy = c[1] - a[1]
+      const len = Math.hypot(dx, dy)
+      if (len < 0.05) continue
+      const nx = dy / len
+      const ny = -dx / len
+      const A0 = V(a[0], a[1], top)
+      const A1 = V(a[0], a[1], top + ph)
+      const C0 = V(c[0], c[1], top)
+      const C1 = V(c[0], c[1], top + ph)
+      for (const side of [1, -1]) {
+        const q = [A0, C0, C1, A1].map((P, i) => b.vertex(P[0], P[1], P[2], nx * side, 0, -ny * side, 0, 0, i < 2 ? tall : tall + ph, seed, kind + 20, i === 1 || i === 2 ? len : 0, len))
+        if (side === 1) b.quad(q[0], q[1], q[2], q[3])
+        else b.quad(q[0], q[3], q[2], q[1])
+      }
+    }
+    const obb = minAreaRect(ring)
+    const inside = (x: number, y: number) => pointInRing(x, y, ring)
+    const pick = (margin: number): [number, number] | null => {
+      for (let t = 0; t < 8; t++) {
+        const u = (R() * 2 - 1) * Math.max(0, obb.halfLong - margin)
+        const w = (R() * 2 - 1) * Math.max(0, obb.halfShort - margin)
+        const x = obb.cx + obb.ax * u - obb.ay * w
+        const y = obb.cy + obb.ay * u + obb.ax * w
+        if (inside(x, y)) return [x, y]
+      }
+      return null
+    }
+    const yaw = Math.atan2(obb.ax, obb.ay)
+    // Stair house on anything with a lift or a staircase to the roof.
+    if (tall > 11 && area > 120 && obb.halfShort > 3) {
+      const p = pick(3)
+      if (p) box(b, p[0], p[1], obb.ax, obb.ay, 1.8, 1.4, top, 2.7, seed, kind + 20)
+    }
+    // AC outdoor units in rows (offices and shops have many).
+    const units = Math.min(14, Math.round(area / (kind === 7 || kind === 2 ? 70 : 140)))
+    for (let i = 0; i < units; i++) {
+      const p = pick(1.2)
+      if (!p) continue
+      const v = V(p[0], p[1], top)
+      instances.ac.push(v[0], v[1], v[2], yaw + (R() < 0.5 ? 0 : Math.PI), 0.9 + R() * 0.3, 0)
+    }
+    if ((kind === 6 || (tall > 14 && seed > 0.55)) && area > 150) {
+      const p = pick(2.5)
+      if (p) {
+        const v = V(p[0], p[1], top)
+        instances.tank.push(v[0], v[1], v[2], yaw, 0.85 + seed * 0.5, 0)
+      }
+    }
+  }
+
+  /** Closed box (walls + lid) in the building mesh, axis (ax, ay) along x. */
+  function box(b: MeshBuilder, cx: number, cy: number, ax: number, ay: number, hx: number, hy: number, z0: number, h: number, seed: number, kind: number): void {
+    const c = [
+      [cx - ax * hx + ay * hy, cy - ay * hx - ax * hy],
+      [cx + ax * hx + ay * hy, cy + ay * hx - ax * hy],
+      [cx + ax * hx - ay * hy, cy + ay * hx + ax * hy],
+      [cx - ax * hx - ay * hy, cy - ay * hx + ax * hy],
+    ] as P2[]
+    if (polygonArea(c) < 0) c.reverse()
+    for (let k = 0; k < 4; k++) {
+      const a = c[k]
+      const d = c[(k + 1) % 4]
+      const len = Math.hypot(d[0] - a[0], d[1] - a[1])
+      const nx = (d[1] - a[1]) / len
+      const ny = -(d[0] - a[0]) / len
+      const q = [V(a[0], a[1], z0), V(d[0], d[1], z0), V(d[0], d[1], z0 + h), V(a[0], a[1], z0 + h)].map((P, i) => b.vertex(P[0], P[1], P[2], nx, 0, -ny, 0, 0, i < 2 ? 0 : h, seed, kind, i === 1 || i === 2 ? len : 0, len))
+      b.quad(q[0], q[1], q[2], q[3])
+    }
+    const t = c.map((p) => V(p[0], p[1], z0 + h)).map((P) => b.vertex(P[0], P[1], P[2], 0, 1, 0, 0, 0, h, seed, kind, 0, 0))
+    b.quadUp(t[0], t[1], t[2], t[3])
   }
   stats.osmBuildings = bl ? bl.length - skipped : 0
   stats.skippedForPlateau = skipped
@@ -1063,8 +1171,8 @@ export function buildTile(req: BuildRequest): TileBuild {
   return {
     id,
     anchor,
-    buildings: buildings.empty ? null : buildings.build(),
-    roofs: roofs.empty ? null : roofs.build(),
+    buildings: [...cells.values()].filter((c) => !c.buildings.empty).map((c) => c.buildings.build()),
+    roofs: [...cells.values()].filter((c) => !c.roofs.empty).map((c) => c.roofs.build()),
     roads: roads.empty ? null : roads.build(),
     sidewalks: sidewalks.empty ? null : sidewalks.build(),
     ballast: ballast.empty ? null : ballast.build(),

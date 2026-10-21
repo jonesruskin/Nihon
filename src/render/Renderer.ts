@@ -53,6 +53,7 @@ import { CloudsEffect, CLOUD_SHAPE_DETAIL_TEXTURE_SIZE, CLOUD_SHAPE_TEXTURE_SIZE
 import { DataTextureLoader, parseUint8Array, STBNLoader } from '@takram/three-geospatial'
 import type { WorldFrame } from '../core/frame'
 import { NightLights } from './NightLights'
+import { DepthType, N8AOPostPass } from 'n8ao'
 
 export type QualityTier = 'low' | 'medium' | 'high' | 'ultra'
 
@@ -141,6 +142,7 @@ export class RenderPipeline {
   private envAge = Infinity
   private lastSunDir = new Vector3()
   private bloom: BloomEffect
+  private ao: N8AOPostPass
   private sanitize = new SanitizeEffect()
   readonly lights: NightLights
   /** Fog extinction per metre (0 = clear air beyond the atmosphere model). */
@@ -168,7 +170,6 @@ export class RenderPipeline {
       stencil: false,
       logarithmicDepthBuffer: true,
       powerPreference: 'high-performance',
-      preserveDrawingBuffer: true,
     })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     this.renderer.outputColorSpace = SRGBColorSpace
@@ -181,6 +182,25 @@ export class RenderPipeline {
 
     this.composer = new EffectComposer(this.renderer, { frameBufferType: HalfFloatType, multisampling: 0 })
     this.composer.addPass(new RenderPass(this.scene, this.camera))
+    // Ambient occlusion (high/ultra): contact shadows where walls meet the
+    // street, under cars and eaves, between people. Applied to scene radiance
+    // before the atmosphere, in metres so a street reads at street scale.
+    this.ao = new N8AOPostPass(this.scene, this.camera, 1, 1)
+    Object.assign(this.ao.configuration, {
+      depthBufferType: DepthType.Log,
+      aoRadius: 2.2,
+      distanceFalloff: 0.8,
+      intensity: 2.4,
+      aoSamples: 12,
+      denoiseSamples: 6,
+      denoiseRadius: 10,
+      halfRes: true,
+      depthAwareUpsampling: true,
+      gammaCorrection: false,
+      screenSpaceRadius: false,
+    })
+    this.ao.enabled = false
+    if (!new URLSearchParams(location.search).has('noao')) this.composer.addPass(this.ao)
 
     this.clouds = new CloudsEffect(this.camera)
     this.clouds.coverage = 0.35
@@ -191,7 +211,7 @@ export class RenderPipeline {
     this.aerial = new AerialPerspectiveEffect(this.camera, { sky: true, sun: true, moon: true })
     this.linkCloudBuffers()
 
-    this.bloom = new BloomEffect({ intensity: 0.6, luminanceThreshold: 0.92, luminanceSmoothing: 0.25, mipmapBlur: true })
+    this.bloom = new BloomEffect({ intensity: 0.5, luminanceThreshold: 1.6, luminanceSmoothing: 0.4, mipmapBlur: true, radius: 0.7 })
     this.toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.AGX })
     const debug = new URLSearchParams(location.search)
     if (!debug.has('noclouds')) this.composer.addPass(new EffectPass(this.camera, this.clouds))
@@ -286,15 +306,28 @@ export class RenderPipeline {
   setQuality(q: QualityTier): void {
     this.quality = q
     const dpr = window.devicePixelRatio || 1
-    const ratio = { low: 0.6, medium: 1, high: Math.min(dpr, 1.5), ultra: Math.min(dpr, 2) }[q]
-    this.renderer.setPixelRatio(ratio)
+    this.baseRatio = { low: 0.6, medium: 1, high: Math.min(dpr, 1.5), ultra: Math.min(dpr, 2) }[q]
+    this.renderer.setPixelRatio(this.baseRatio * this.renderScale)
     this.clouds.qualityPreset = q === 'ultra' ? 'high' : q === 'high' ? 'medium' : 'low'
     this.updateCloudSkip()
     this.renderer.shadowMap.enabled = q !== 'low'
-    this.lights.setPoolSize({ low: 8, medium: 16, high: 24, ultra: 32 }[q])
+    this.ao.enabled = q === 'high' || q === 'ultra'
+    this.ao.configuration.halfRes = q !== 'ultra'
+    this.lights.setPoolSize({ low: 10, medium: 20, high: 32, ultra: 48 }[q])
     this.sun.shadow.mapSize.setScalar(q === 'ultra' ? 4096 : 2048)
     this.sun.shadow.map?.dispose()
     this.sun.shadow.map = null
+    this.resize()
+  }
+
+  private baseRatio = 1
+  private renderScale = 1
+
+  /** Dynamic resolution: a multiplier on the tier's pixel ratio. */
+  setRenderScale(s: number): void {
+    if (s === this.renderScale) return
+    this.renderScale = s
+    this.renderer.setPixelRatio(this.baseRatio * s)
     this.resize()
   }
 
@@ -394,13 +427,20 @@ export class RenderPipeline {
     // Eye adaptation: the visual system opens up at dusk and night.
     const el = this.sunElevation()
     // Relative to daylight: the eye opens up ~2x through dusk into night.
-    const outdoor = el > 8 ? 1 : el > -6 ? 1 + ((8 - el) / 14) * 0.7 : 1.7 + Math.min(0.5, (-6 - el) / 12)
+    // At night the dark-adapted eye (and every phone camera) sees a lit city
+    // street as readable, not black: ~3x daylight exposure in town.
+    const nightEye = (2.2 + 0.2 * this.lights.urban) * (1 - 0.15 * this.lights.glare)
+    const outdoor = (el > 8 ? 1 : el > -6 ? 1 + ((8 - el) / 14) * (nightEye - 1) : nightEye + Math.min(0.4, (-6 - el) / 15)) * this.exposureBias
     const target = outdoor + (Math.max(outdoor, 1.6) - outdoor) * this.indoor
-    this.exposure += (target * (1 + this.overcast * 0.25) - this.exposure) * Math.min(1, dt * 0.8)
+    const want = target * (1 + this.overcast * 0.25)
+    this.exposure = this.snapExposure ? want : this.exposure + (want - this.exposure) * Math.min(1, dt * 0.8)
+    this.snapExposure = false
     this.sanitize.uniforms.get('uExposure')!.value = this.exposure
-    // Bloom sees exposed radiance: only what would clip blooms.
-    this.bloom.luminanceMaterial.threshold = 0.9
-    this.bloom.intensity = 0.55 - 0.25 * this.night
+    // Bloom sees exposed radiance: only light sources well past white bloom
+    // (lamps, headlights, sign highlights), not every lit shop window, which
+    // up close would fog the whole frame.
+    this.bloom.luminanceMaterial.threshold = 1.6
+    this.bloom.intensity = 0.5 - 0.12 * this.night
     this.renderer.toneMappingExposure = this.exposure
     // Shade in a sunny street gets ~20% of direct light from sky and bounce.
     const sunUp = Math.max(0, Math.min(1, (el + 1) / 14))
@@ -415,10 +455,10 @@ export class RenderPipeline {
     this.moon.target.updateMatrixWorld()
 
     this.updateCloudSkip()
-    this.lights.update(dt, this.camera.position, this.night)
+    this.lights.update(dt, this.camera, this.night)
     // Sky glow in scene radiance (exposure is applied later): sodium/LED mix,
     // ~3x brighter when low cloud reflects the city back down.
-    const g = this.night * (0.15 + 0.85 * this.lights.urban) * 0.0035 * (1 + this.overcast * 2.5)
+    const g = this.night * (0.2 + 0.6 * this.lights.urban) * 0.0018 * (1 + this.overcast * 2.5)
     const su = this.sanitize.uniforms
     ;(su.get('uGlow')!.value as Vector3).set(g * 1.0, g * 0.78, g * 0.6)
     ;(su.get('uCamPos')!.value as Vector3).copy(this.camera.position)
@@ -432,6 +472,10 @@ export class RenderPipeline {
   }
 
   private exposure = 1
+  /** QA/tuning multiplier on eye adaptation. */
+  exposureBias = 1
+  /** Skip eye adaptation once (after a loading screen, nobody saw the change). */
+  snapExposure = true
   private moon = new DirectionalLight(0x9fb2d6, 0)
   /** Daylight bounce: sky above, sunlit ground and walls below. */
   private bounce = new HemisphereLight(0xb9cbe6, 0x8a7d6c, 0)
@@ -444,6 +488,13 @@ export class RenderPipeline {
       this.renderer.render(this.scene, this.camera)
       return
     }
+    // Shadows from a sun that barely moves: redraw the map every other frame
+    // below ultra (moving cars and people lag by at most one frame).
+    const sm = this.renderer.shadowMap
+    sm.autoUpdate = false
+    sm.needsUpdate = this.quality === 'ultra' || (this.frameNo++ & 1) === 0
     this.composer.render(dt)
   }
+
+  private frameNo = 0
 }

@@ -3,132 +3,176 @@
   "name": "player_m",
   "gender": "m",
   "age": 0.5,
-  "season": "summer"
+  "season": "summer",
+  "stride": 1.529,
+  "idle": 7.2667
  },
  {
   "name": "player_f",
   "gender": "f",
   "age": 0.48,
-  "season": "summer"
+  "season": "summer",
+  "stride": 1.099,
+  "idle": 7.2667
  },
  {
   "name": "salaryman_a",
   "gender": "m",
   "age": 0.56,
-  "season": "any"
+  "season": "any",
+  "stride": 1.606,
+  "idle": 7.2667
  },
  {
   "name": "salaryman_b",
   "gender": "m",
   "age": 0.66,
-  "season": "any"
+  "season": "any",
+  "stride": 1.494,
+  "idle": 7.2667
  },
  {
   "name": "salaryman_c",
   "gender": "m",
   "age": 0.5,
-  "season": "any"
+  "season": "any",
+  "stride": 1.418,
+  "idle": 7.2667
  },
  {
   "name": "office_f",
   "gender": "f",
   "age": 0.52,
-  "season": "any"
+  "season": "any",
+  "stride": 1.111,
+  "idle": 7.2667
  },
  {
   "name": "young_f",
   "gender": "f",
   "age": 0.42,
-  "season": "summer"
+  "season": "summer",
+  "stride": 1.1,
+  "idle": 7.2667
  },
  {
   "name": "young_m",
   "gender": "m",
   "age": 0.44,
-  "season": "summer"
+  "season": "summer",
+  "stride": 1.149,
+  "idle": 7.2667
  },
  {
   "name": "student_f",
   "gender": "f",
   "age": 0.36,
-  "season": "summer"
+  "season": "summer",
+  "stride": 0.926,
+  "idle": 7.2667
  },
  {
   "name": "casual_m",
   "gender": "m",
   "age": 0.6,
-  "season": "any"
+  "season": "any",
+  "stride": 1.532,
+  "idle": 7.2667
  },
  {
   "name": "elder_m",
   "gender": "m",
   "age": 0.86,
-  "season": "any"
+  "season": "any",
+  "stride": 1.29,
+  "idle": 7.2667
  },
  {
   "name": "elder_f",
   "gender": "f",
   "age": 0.86,
-  "season": "summer"
+  "season": "summer",
+  "stride": 1.145,
+  "idle": 7.2667
  },
  {
   "name": "tourist_m",
   "gender": "m",
   "age": 0.5,
-  "season": "summer"
+  "season": "summer",
+  "stride": 1.801,
+  "idle": 7.2667
  },
  {
   "name": "tourist_f",
   "gender": "f",
   "age": 0.47,
-  "season": "summer"
+  "season": "summer",
+  "stride": 1.494,
+  "idle": 7.2667
  },
  {
   "name": "player_m_w",
   "gender": "m",
   "age": 0.5,
-  "season": "winter"
+  "season": "winter",
+  "stride": 1.529,
+  "idle": 7.2667
  },
  {
   "name": "player_f_w",
   "gender": "f",
   "age": 0.48,
-  "season": "winter"
+  "season": "winter",
+  "stride": 1.099,
+  "idle": 7.2667
  },
  {
   "name": "young_m_w",
   "gender": "m",
   "age": 0.42,
-  "season": "winter"
+  "season": "winter",
+  "stride": 1.132,
+  "idle": 7.2667
  },
  {
   "name": "young_m2_w",
   "gender": "m",
   "age": 0.47,
-  "season": "winter"
+  "season": "winter",
+  "stride": 1.365,
+  "idle": 7.2667
  },
  {
   "name": "young_f_w",
   "gender": "f",
   "age": 0.42,
-  "season": "winter"
+  "season": "winter",
+  "stride": 1.1,
+  "idle": 7.2667
  },
  {
   "name": "student_f_w",
   "gender": "f",
   "age": 0.37,
-  "season": "winter"
+  "season": "winter",
+  "stride": 0.932,
+  "idle": 7.2667
  },
  {
   "name": "elder_f_w",
   "gender": "f",
   "age": 0.84,
-  "season": "winter"
+  "season": "winter",
+  "stride": 1.145,
+  "idle": 7.2667
  },
  {
   "name": "tourist_m_w",
   "gender": "m",
   "age": 0.5,
-  "season": "winter"
+  "season": "winter",
+  "stride": 1.801,
+  "idle": 7.2667
  }
 ]

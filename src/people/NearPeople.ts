@@ -107,8 +107,10 @@ export class NearPeople {
       o.position.copy(s.ped.pos)
       // Person faces -Z; crowd yaw points +Z along travel.
       o.rotation.set(0, s.ped.yaw + Math.PI, 0)
+      o.scale.setScalar(s.ped.scale)
       s.tint.feet.value = s.ped.pos.y
-      s.person.update(dt, s.ped.speed)
+      // Same step as the crowd LOD it replaces: the swap doesn't pop.
+      s.person.update(dt, s.ped.speed, s.ped.walkPhase)
     }
   }
 }

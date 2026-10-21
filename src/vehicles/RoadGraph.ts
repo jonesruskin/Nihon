@@ -16,6 +16,8 @@ export interface Lane {
   next: number[] // lane ids continuing from `to`
   speed: number // m/s limit
   width: number
+  /** Parallel lanes in this direction (wide urban roads carry 2-3). */
+  lanes: number
   signal: number | null // signal id at the end node, if any
   heading: number // final heading (rad) for signal phase
   bridge: boolean
@@ -94,10 +96,14 @@ export class RoadGraph {
         const laneW = p.cls === 'motorway' ? 3.5 : Math.min(3.25, p.width / 2)
         const oneway = p.oneway !== 0 || p.cls === 'motorway'
         const forward = p.oneway === -1 ? [...pts].reverse() : pts
-        if (oneway) this.addLane(t.key, p, offsetLine(forward, p.cls === 'motorway' ? laneW * 0.5 - laneW * 0.5 : 0), speed, laneW)
+        // Lanes per direction from the carriageway width (OSM has no lane
+        // counts in the tiles): a 14 m primary carries two each way.
+        const multi = ['motorway', 'trunk', 'primary', 'secondary'].includes(p.cls)
+        const perDir = multi ? Math.max(1, Math.min(3, Math.floor((oneway ? p.width : p.width / 2) / 3.1))) : 1
+        if (oneway) this.addLane(t.key, p, offsetLine(forward, perDir > 1 ? -laneW * (perDir - 1) * 0.5 : 0), speed, laneW, perDir)
         else {
-          this.addLane(t.key, p, offsetLine(pts, laneW * 0.5), speed, laneW)
-          this.addLane(t.key, p, offsetLine([...pts].reverse(), laneW * 0.5), speed, laneW)
+          this.addLane(t.key, p, offsetLine(pts, laneW * 0.5), speed, laneW, perDir)
+          this.addLane(t.key, p, offsetLine([...pts].reverse(), laneW * 0.5), speed, laneW, perDir)
         }
       }
     }
@@ -156,7 +162,7 @@ export class RoadGraph {
     return best
   }
 
-  private addLane(tile: string, p: NavPath, pts: Vector3[], speed: number, width: number): void {
+  private addLane(tile: string, p: NavPath, pts: Vector3[], speed: number, width: number, lanes = 1): void {
     const cum = [0]
     for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + pts[i].distanceTo(pts[i - 1]))
     const n = pts.length
@@ -174,6 +180,7 @@ export class RoadGraph {
       next: [],
       speed,
       width,
+      lanes,
       signal: null,
       heading: Math.atan2(-dx, -dz),
       bridge: p.bridge,

@@ -13,6 +13,7 @@ export interface BuildingUniforms {
   uWet: IUniform<number> // rain wetness 0..1
   uSnow: IUniform<number> // snow cover on roofs 0..1
   uTime: IUniform<number>
+  uShopOpen: IUniform<number> // share of shops open at this hour 0..1
 }
 
 export const buildingUniforms: BuildingUniforms = {
@@ -20,6 +21,7 @@ export const buildingUniforms: BuildingUniforms = {
   uWet: { value: 0 },
   uSnow: { value: 0 },
   uTime: { value: 0 },
+  uShopOpen: { value: 0.85 },
 }
 
 const common = /* glsl */ `
@@ -27,12 +29,14 @@ uniform float uNight;
 uniform float uWet;
 uniform float uSnow;
 uniform float uTime;
+uniform float uShopOpen;
 varying vec3 vWPos;
 varying vec3 vWNrm;
 varying float vBh;
 flat varying float vSeed;
 flat varying float vKind;
 flat varying float vFh;
+varying vec2 vWall;
 float bhash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float bhash1(float p) { return fract(sin(p * 91.345) * 47453.5453); }
 `
@@ -42,6 +46,7 @@ attribute float bh;
 attribute float seed;
 attribute float kind;
 attribute float fh;
+attribute vec2 wall; // metres along the wall, wall length (OSM walls; 0 elsewhere)
 `
 
 /**
@@ -51,7 +56,7 @@ attribute float fh;
 export function createBuildingMaterial(): MeshStandardMaterial {
   const m = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0 })
   m.name = 'facade'
-  m.customProgramCacheKey = () => 'nihon-facade-v2'
+  m.customProgramCacheKey = () => 'nihon-facade-v3'
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, buildingUniforms)
     shader.vertexShader = shader.vertexShader
@@ -64,7 +69,8 @@ export function createBuildingMaterial(): MeshStandardMaterial {
         vBh = bh;
         vSeed = seed;
         vKind = kind;
-        vFh = fh;`,
+        vFh = fh;
+        vWall = wall;`,
       )
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${common}\n${facadeFns}`)
@@ -137,6 +143,9 @@ FacadeSample facade() {
   // Hashes amplify tiny interpolation error enormously: keep these exact.
   float s = floor(vSeed * 4096.0 + 0.5) / 4096.0;
   float kind = floor(vKind + 0.5);
+  // kind + 20: parapets, stair houses: plain cladding, no windows.
+  bool plain = kind >= 19.5;
+  if (plain) kind -= 20.0;
   float up = n.y;
   if (up > 0.6) {
     // Roofs: concrete / waterproofing membrane / metal, with snow.
@@ -151,7 +160,9 @@ FacadeSample facade() {
 
   // Walls. Coordinates: u along the wall (m), v above building base (m).
   vec2 t = normalize(vec2(-n.z, n.x) + 1e-5);
-  float u = dot(vWPos.xz, t);
+  float wallLen = vWall.y;
+  bool fitted = wallLen > 0.5;
+  float u = fitted ? vWall.x : dot(vWPos.xz, t);
   float v = vBh;
   bool house = kind == 1.0;
   bool glassTower = kind == 3.0;
@@ -162,6 +173,9 @@ FacadeSample facade() {
 
   float floorH = vFh > 0.0 ? vFh : (house ? 2.9 : (glassTower ? 4.0 : (apartment ? 2.95 : mix(3.2, 3.9, bhash1(s * 3.1)))));
   float bay = house ? mix(2.6, 3.6, bhash1(s * 5.7)) : (glassTower ? 1.5 : (apartment ? mix(5.5, 7.0, bhash1(s * 7.3)) : mix(1.8, 3.4, bhash1(s * 7.3))));
+  // A whole number of bays per wall: windows sit centred in each wall
+  // rather than being cut off at the corners.
+  if (fitted) bay = wallLen / max(1.0, floor(wallLen / bay + 0.5));
   float fl = floor(v / floorH);
   float fy = fract(v / floorH);
   float bx = floor(u / bay);
@@ -182,9 +196,12 @@ FacadeSample facade() {
   float wy = abs(fy - 0.55) * 2.0;
   float isWin = (1.0 - aastep(winW, wx)) * (1.0 - aastep(winH, wy));
   if (house) isWin *= step(0.35, bhash(vec2(bx, fl) + s));
+  if (plain || (fitted && wallLen < 1.8)) isWin = 0.0;
   bool vernacular = kind >= 7.5; // machiya, farmhouse, shrine, Ryukyu
-  bool shop = !vernacular && (commercial || (!house && !glassTower && !industrial && !apartment && !wood && bhash1(s * 23.0) > 0.25)) && v < 4.2;
+  bool shop = !plain && !vernacular && (commercial || (!house && !glassTower && !industrial && !apartment && !wood && bhash1(s * 23.0) > 0.25)) && v < 4.2;
   if (shop) { isWin = (1.0 - aastep(0.92, abs(fx - 0.5) * 2.0)) * aastep(0.08, v) * (1.0 - aastep(3.3, v)); }
+  // Opening hours: closed shops pull down their roller shutters (シャッター).
+  float shopOpen = shop ? step(bhash1(s * 61.0 + bx * 0.13), uShopOpen) : 1.0;
   if (industrial) isWin *= aastep(0.6, fy) * (1.0 - aastep(0.85, fy)) * step(0.5, bhash1(bx + s));
   float band = (!house && !glassTower && !apartment) ? aastep(0.9, fy) * 0.12 : 0.0;
 
@@ -196,9 +213,67 @@ FacadeSample facade() {
     glass = mix(vec3(0.16, 0.22, 0.27), vec3(0.24, 0.28, 0.31), bhash1(s * 29.0));
     wall = mix(vec3(0.30, 0.32, 0.34), vec3(0.55, 0.56, 0.58), bhash1(s * 31.0));
   }
+  // Interior mapping: a ray from the eye through the pane into a box room
+  // (bay wide, floor high, a few metres deep) gives every window a back
+  // wall, side walls, floor and ceiling that shift with parallax. Fades to
+  // the flat average where windows are only a few pixels.
+  float roomLit = 0.0; // how much of the visible interior is the bright ceiling/back wall
+  if (isWin > 0.01 && fw < 0.35 && !glassTower) {
+    vec3 T3 = vec3(t.x, 0.0, t.y) * (fitted ? -1.0 : 1.0);
+    vec3 N3 = vec3(n.x, 0.0, n.z);
+    vec3 V = normalize(vWPos - cameraPosition);
+    float depth = house || apartment ? 3.6 : 5.0;
+    vec3 rd = vec3(dot(V, T3), V.y, -dot(V, N3));
+    rd.z = max(rd.z, 1e-3);
+    vec3 ro = vec3(fx * bay, fy * floorH, 0.0);
+    vec3 room = vec3(bay, floorH, depth);
+    vec3 tt = vec3(rd.x > 0.0 ? (room.x - ro.x) / rd.x : -ro.x / min(rd.x, -1e-4),
+                   rd.y > 0.0 ? (room.y - ro.y) / rd.y : -ro.y / min(rd.y, -1e-4),
+                   room.z / rd.z);
+    float th = min(tt.x, min(tt.y, tt.z));
+    vec3 hit = ro + rd * th;
+    float rh = bhash(vec2(bx * 5.1 + s * 31.0, fl * 7.7));
+    vec3 wallIn = mix(vec3(0.62, 0.6, 0.55), vec3(0.78, 0.76, 0.7), rh);
+    vec3 ic;
+    if (th == tt.z) {
+      ic = wallIn;
+      // A shelf, a partition or a cabinet against the back wall.
+      float furn = step(0.55, bhash(vec2(floor(hit.x * 1.3), rh))) * step(hit.y, 0.9 + rh * 0.8);
+      ic = mix(ic, vec3(0.32, 0.3, 0.28), furn * 0.8);
+      roomLit = 0.8;
+    } else if (th == tt.x) { ic = wallIn * 0.78; roomLit = 0.55; }
+    else if (rd.y < 0.0) { ic = mix(vec3(0.34, 0.26, 0.18), vec3(0.42, 0.42, 0.4), step(0.5, rh)); roomLit = 0.35; }
+    else { ic = vec3(0.86); roomLit = 1.0; }
+    // Light falls off into the room; curtains are drawn in some flats.
+    ic *= mix(1.0, 0.45, clamp(hit.z / depth, 0.0, 1.0));
+    float curtained = (house || apartment) ? step(0.62, pane) : 0.0;
+    ic = mix(ic, vec3(0.78, 0.74, 0.66), curtained * 0.85);
+    vec3 roomGlass = ic * 0.42;
+    glass = mix(roomGlass, glass, smoothstep(0.15, 0.35, fw));
+  }
+  // Frames: aluminium surround, and the centre stile of the sliding sashes
+  // (引き違い窓) on homes and flats.
+  float frame = 0.0;
+  if (isWin > 0.01 && fw < 0.4) {
+    float ox = (wx - 0.0) / max(winW, 0.01);
+    float oy = (wy - 0.0) / max(winH, 0.01);
+    frame = aastep(0.93, max(ox, oy));
+    if ((house || apartment || !commercial) && !glassTower) frame = max(frame, 1.0 - aastep(0.035, abs(fx - 0.5)));
+    // Recess: the lintel shades the top of the opening.
+    float top = aastep(0.78, (fy - 0.55) / max(winH * 0.5, 0.01) * 0.5 + 0.5);
+    glass *= 1.0 - 0.35 * top;
+  }
   vec3 albedo = mix(wall * (1.0 - band), glass, isWin);
-  float rough = mix(mix(0.82, 0.35, uWet), 0.04, isWin);
-  float metal = isWin * (glassTower ? 0.55 : 0.3);
+  albedo = mix(albedo, vec3(0.7, 0.71, 0.72), frame * isWin);
+  if (shop && shopOpen < 0.5) {
+    // Corrugated steel shutter: ribs every ~8 cm, a bottom rail, grime low down.
+    float rib = 0.86 + 0.14 * smoothstep(0.3, 0.5, abs(fract(v * 12.0) - 0.5) * 2.0);
+    vec3 shutter = mix(vec3(0.5, 0.52, 0.52), vec3(0.62, 0.62, 0.6), bhash1(s * 53.0 + bx)) * rib * mix(0.75, 1.0, smoothstep(0.0, 0.8, v));
+    albedo = mix(albedo, shutter, isWin);
+    isWin = 0.0;
+  }
+  float rough = mix(mix(0.82, 0.35, uWet), mix(0.06, 0.4, frame), isWin);
+  float metal = isWin * (glassTower ? 0.55 : mix(0.18, 0.6, frame));
   vec3 emis = vec3(0.0);
 
   // マンション: continuous balconies with slab edges, frosted railing panels,
@@ -226,10 +301,11 @@ FacadeSample facade() {
 
   // 雑居ビル signage: vertical kanban near one edge and sign bands per
   // floor — the visual signature of Shinjuku, Shibuya, Dotonbori.
-  if (commercial && v > 3.6) {
-    float signRow = step(0.55, bhash(vec2(fl, s * 9.0)));
+  if (commercial && v > 3.6 && !plain) {
+    float signRow = step(0.78, bhash(vec2(fl, s * 9.0)));
     float bandSign = signRow * aastep(0.02, fy) * (1.0 - aastep(0.28, fy));
-    float edge = aastep(0.0, fx) * (1.0 - aastep(0.18, fx)) * step(0.5, bhash1(bx * 0.37 + s * 5.0));
+    // One tall vertical kanban per wall end, not one per window bay.
+    float edge = fitted ? (1.0 - aastep(1.1, u)) * aastep(0.15, u) * step(0.45, bhash1(s * 5.0 + floor(wallLen))) : aastep(0.0, fx) * (1.0 - aastep(0.18, fx)) * step(0.8, bhash1(bx * 0.37 + s * 5.0));
     float hue = bhash(vec2(bx, fl) + s * 13.0);
     vec3 signC = hue < 0.25 ? vec3(0.85, 0.12, 0.10) : hue < 0.45 ? vec3(0.95, 0.75, 0.12) : hue < 0.6 ? vec3(0.12, 0.35, 0.8) : hue < 0.75 ? vec3(0.95, 0.95, 0.92) : hue < 0.88 ? vec3(0.1, 0.55, 0.3) : vec3(0.85, 0.3, 0.6);
     // Distant streets of signs blend into one warm average.
@@ -243,7 +319,8 @@ FacadeSample facade() {
     vec3 signFace = mix(signC, vec3(1.0) - signC * 0.7, mix(0.33, glyph, gfade) * 0.8);
     albedo = mix(albedo, signFace, sign);
     rough = mix(rough, 0.4, sign);
-    emis += signFace * sign * mix(0.06, 0.5, uNight);
+    // Lit signs are the brightest things on a Japanese street at night.
+    emis += signFace * sign * mix(0.06, 0.85, uNight);
   }
 
   // Temples & shrines: dark timber, white plaster panels, no glass.
@@ -337,6 +414,36 @@ FacadeSample facade() {
 
   // Far away the pattern is sub-pixel: fade to its average to avoid moire.
   float far = vernacular ? 0.0 : smoothstep(0.15, 0.45, fw);
+  // Shop fascia: the sign board above the ground-floor glazing.
+  if (shop && !house) {
+    float fascia = aastep(3.3, v) * (1.0 - aastep(4.05, v));
+    float hueF = bhash1(s * 83.0 + floor(u / 9.0));
+    vec3 fc = hueF < 0.3 ? vec3(0.92, 0.92, 0.9) : hueF < 0.5 ? vec3(0.75, 0.12, 0.1) : hueF < 0.65 ? vec3(0.1, 0.32, 0.62) : hueF < 0.8 ? vec3(0.95, 0.72, 0.15) : vec3(0.15, 0.45, 0.25);
+    // The shop's name across the middle of its front: a row of glyph blocks.
+    float fv = (v - 3.3) / 0.75;
+    float cu = u / 0.42;
+    float cf = fract(cu);
+    // Each character: a few horizontal and vertical strokes on a 3x3 grid,
+    // which reads as kanji/kana at street distance.
+    vec2 cc = vec2((cf - 0.12) / 0.76, (fv - 0.22) / 0.56);
+    float ch = floor(cu) + s * 7.0;
+    float glyph = 0.0;
+    for (int k = 0; k < 3; k++) {
+      float p = 0.17 + 0.33 * float(k);
+      glyph = max(glyph, step(0.45, bhash(vec2(ch, float(k)))) * (1.0 - aastep(0.07, abs(cc.y - p))) * aastep(0.1, cc.x) * (1.0 - aastep(0.9, cc.x)));
+      glyph = max(glyph, step(0.55, bhash(vec2(ch, float(k) + 5.0))) * (1.0 - aastep(0.06, abs(cc.x - p))) * aastep(0.05, cc.y) * (1.0 - aastep(0.95, cc.y)));
+    }
+    glyph *= step(0.0, cc.x) * step(cc.x, 1.0) * step(0.0, cc.y) * step(cc.y, 1.0) * step(0.15, bhash1(ch * 3.0));
+    float txt = glyph * (1.0 - aastep(0.6, abs(fx - 0.5) * 2.0)) * (1.0 - far);
+    fc = mix(fc, hueF < 0.3 ? vec3(0.1, 0.1, 0.12) : vec3(0.96, 0.95, 0.92), txt);
+    albedo = mix(albedo, fc, fascia);
+    rough = mix(rough, 0.45, fascia);
+    emis += fc * fascia * uNight * 0.22 * (0.25 + 0.75 * shopOpen);
+  }
+  // Contact shading: walls darken toward the street where sky light is
+  // blocked by the ground, kerb and neighbours (cheap baked AO).
+  float ao = mix(0.6, 1.0, smoothstep(0.0, 2.6, v)) * mix(0.9, 1.0, smoothstep(0.0, 9.0, v));
+  albedo *= ao;
   vec3 avg = mix(wall, glass, winW * winH * (house ? 0.6 : 1.0));
   if (apartment && v > 3.0) avg = mix(wall, vec3(0.6, 0.61, 0.6), 0.55); // slabs, rails, glass doors
   if (commercial && v > 3.6) avg = mix(avg, vec3(0.7, 0.45, 0.35), 0.3); // signs
@@ -353,7 +460,7 @@ FacadeSample facade() {
     vec3 warm = vec3(1.0, 0.72, 0.42);
     vec3 cool = vec3(0.85, 0.92, 1.0);
     vec3 col = mix(warm, cool, step(apartment ? 0.7 : 0.5, bhash1(h * 7.0 + s)));
-    float intensity = mix(0.02, 0.09, bhash1(h * 3.0));
+    float intensity = mix(0.05, 0.22, bhash1(h * 3.0));
     // Inside each window: ceiling light falls off downward, half-drawn
     // curtains or blinds, and the occasional blue TV flicker.
     float wyIn = clamp((fy - 0.55) / max(winH, 0.05) + 0.5, 0.0, 1.0);
@@ -363,13 +470,31 @@ FacadeSample facade() {
     float blinds = r2 > 0.8 ? 0.6 + 0.4 * step(0.5, fract(fy * 40.0)) : 1.0;
     float shade = mix(1.0, 0.35, curtainX) * blinds * ceiling;
     if (r2 > 0.72 && r2 < 0.8) { col = vec3(0.45, 0.6, 1.0); intensity *= 0.5 + 0.3 * sin(uTime * 3.0 + h * 50.0); }
-    intensity *= shade;
+    intensity *= shade * mix(1.0, 0.55 + 0.7 * roomLit, step(fw, 0.35));
     // ...and at a distance, the average glow of a building's windows.
     float winFrac = apartment && v > 3.0 ? 0.32 : (house ? 0.6 : 1.0) * winW * winH;
-    vec3 avgGlow = mix(warm, cool, 0.45) * occupancy * 0.04 * winFrac;
+    vec3 avgGlow = mix(warm, cool, 0.45) * occupancy * 0.09 * winFrac;
     emis += mix(col * lit * intensity, avgGlow, far) * uNight;
     // Lantern-lit lattices and shoji in old towns.
     emis += vec3(1.0, 0.62, 0.3) * lattice * 0.05 * uNight * step(0.3, bhash1(s * 41.0));
+  }
+  // Street level: shops are lit inside all day (visible through the glass
+  // by day) and are what actually lights a Japanese street at night.
+  if (shop) {
+    float open = shopOpen;
+    vec3 shopC = mix(vec3(1.0, 0.86, 0.66), vec3(0.92, 0.97, 1.0), step(0.55, bhash1(s * 67.0)));
+    // Glow follows the interior seen through the glass (shelves, back
+    // wall, ceiling) so a lit shop reads as a room, not a white panel.
+    float inside = mix(0.55 + 0.75 * roomLit, 0.3 + 2.2 * dot(glass, vec3(0.3, 0.59, 0.11)), step(fw, 0.35));
+    // Display shelves to head height: rows of goods in packaging colours
+    // with darker shelf edges; brighter ceiling light above.
+    float row = floor(v / 0.42);
+    float goodsHash = bhash(vec2(floor(u / 0.16), row + s * 3.0));
+    vec3 goods = mix(vec3(1.0, 0.92, 0.8), mix(vec3(0.95, 0.45, 0.3), vec3(0.35, 0.6, 0.95), step(0.5, goodsHash)), step(0.55, goodsHash) * 0.6);
+    float edge = 1.0 - 0.6 * (1.0 - aastep(0.06, fract(v / 0.42)));
+    vec3 display = v < 2.3 ? goods * edge * (0.6 + 0.4 * step(0.25, goodsHash)) : vec3(0.6);
+    display = mix(display, vec3(0.8), far);
+    emis += shopC * display * isWin * open * mix(0.09, 0.24, bhash1(s * 71.0 + bx)) * inside * mix(0.6, 1.0, uNight) * (1.0 - far * 0.6);
   }
   o.emissive = emis;
   return o;

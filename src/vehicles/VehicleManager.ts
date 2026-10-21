@@ -1,11 +1,14 @@
 // Parked cars along real streets around the player, entering/exiting, and
 // the driving loop. Japan drives on the left, so cars park on the left kerb
 // and the driver's door is on the right.
-import { Group, Vector3 } from 'three'
+import { Group, Mesh, Vector3 } from 'three'
 import type { Physics } from '../physics/Physics'
 import type { VectorManager } from '../world/vector/VectorManager'
 import { Vehicle, type DriveInput } from './Vehicle'
 import { specById, vehicleFromScene, type CarSpec } from './carGeometry'
+import { FarTraffic, lampGeometry, lampMaterial } from './FarTraffic'
+
+const _fwd = new Vector3()
 import { modelLibrary } from '../world/props/ModelLibrary'
 import type { Input } from '../player/Input'
 
@@ -37,7 +40,8 @@ export class VehicleManager {
   current: Vehicle | null = null
   private spawnTimer = 0
   private usedSpots = new Set<string>()
-  maxParked = 16
+  maxParked = 10
+  private far = new FarTraffic(this.root, 24)
 
   constructor(
     private physics: Physics,
@@ -51,15 +55,33 @@ export class VehicleManager {
     this.spawnTimer += dt
     if (this.spawnTimer < 1.5 || !this.physics.ready) return
     this.spawnTimer = 0
-    // Despawn far, unoccupied vehicles.
+    // Despawn far, unoccupied vehicles. Parked cars beyond ~40 m are drawn as
+    // instanced bodies (a scanned car is a dozen draw calls); shadows only close by.
+    this.far.begin()
     for (let i = this.vehicles.length - 1; i >= 0; i--) {
       const v = this.vehicles[i]
+      const d = v.position.distanceTo(center)
+      const near = v === this.current || !v.parked || d < 40
+      v.object.visible = near
+      if (!near) this.far.add(v.spec.id, v.object.position, _fwd.set(0, 0, -1).applyQuaternion(v.object.quaternion), v.model.color)
+      const cast = v === this.current || d < 20
+      if (v.object.userData.cast !== cast) {
+        v.object.userData.cast = cast
+        v.object.traverse((o) => {
+          const m = o as Mesh
+          if (!m.isMesh) return
+          let wheel = false
+          for (let p: typeof o | null = o; p && !wheel; p = p.parent) wheel = /^wheel_/i.test(p.name)
+          m.castShadow = cast && !wheel
+        })
+      }
       if (v === this.current) continue
       if (v.position.distanceTo(center) > 380) {
         v.dispose()
         this.vehicles.splice(i, 1)
       }
     }
+    this.far.end()
     if (this.vehicles.length + this.pending >= this.maxParked) return
     const candidates: Array<{ p: Vector3; yaw: number; key: string; width: number }> = []
     for (const t of this.vector.readyTiles) {
@@ -75,7 +97,7 @@ export class VehicleManager {
           const b = new Vector3(pts[i + 3], pts[i + 4], pts[i + 5]).applyMatrix4(m)
           const mid = new Vector3(pts[i], pts[i + 1], pts[i + 2]).applyMatrix4(m)
           const d = mid.distanceTo(center)
-          if (d < 25 || d > 160) continue
+          if (d < 25 || d > 120) continue
           const dir = b.clone().sub(a).setY(0).normalize()
           const key = `${t.key}:${path.name}:${i}:${Math.round(mid.x)}:${Math.round(mid.z)}`
           if (this.usedSpots.has(key)) continue
@@ -174,6 +196,7 @@ export class VehicleManager {
         const scene = await modelLibrary.clone(id)
         const color = base.colors.length ? base.colors[Math.floor(Math.random() * base.colors.length)] : undefined
         const { model, spec } = vehicleFromScene(base, scene, color)
+        model.root.add(new Mesh(lampGeometry(spec), lampMaterial))
         v = new Vehicle(this.physics, spec, color, model)
       } else v = new Vehicle(this.physics, base)
       v.spawn(at, yaw)

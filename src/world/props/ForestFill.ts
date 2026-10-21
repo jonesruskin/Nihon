@@ -164,6 +164,7 @@ export class ForestFill {
     this.count = 0
     for (const [im, n] of cursor) {
       im.count = n
+      im.visible = n > 0
       im.instanceMatrix.needsUpdate = true
       this.count += n
     }

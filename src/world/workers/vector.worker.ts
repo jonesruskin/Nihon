@@ -17,7 +17,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     const pbf = await fetchArrayBuffer(url, priority)
     const build = buildTile({ ...req, pbf })
     const tr: ArrayBuffer[] = []
-    for (const m of [build.buildings, build.roofs, build.roads, build.sidewalks, build.ballast, build.rails, build.structures, build.water]) tr.push(...transferables(m))
+    for (const m of [...build.buildings, ...build.roofs, build.roads, build.sidewalks, build.ballast, build.rails, build.structures, build.water]) tr.push(...transferables(m))
     for (const a of Object.values(build.instances)) tr.push(a.buffer as ArrayBuffer)
     tr.push(build.wires.buffer as ArrayBuffer)
     for (const p of build.paths) tr.push(p.pts.buffer as ArrayBuffer)

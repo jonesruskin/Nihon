@@ -28,12 +28,16 @@ export interface CrowdArchetype {
   geometry: BufferGeometry
   vat: DataTexture
   frames: Record<string, [number, number]>
+  /** Metres covered by one walk cycle (drives the cycle by distance walked). */
+  stride: number
+  /** Idle loop length (s). */
+  idleDur: number
 }
 
 const BASE = `${import.meta.env.BASE_URL}models/crowd/`
 
 export async function loadCrowdArchetypes(): Promise<CrowdArchetype[]> {
-  const manifest: { name: string; gender: 'm' | 'f'; age: number; season?: CrowdArchetype['season'] }[] = await (await fetch(`${BASE}manifest.json`)).json()
+  const manifest: { name: string; gender: 'm' | 'f'; age: number; season?: CrowdArchetype['season']; stride?: number; idle?: number }[] = await (await fetch(`${BASE}manifest.json`)).json()
   return Promise.all(
     manifest.map(async (m) => {
       let buf: ArrayBuffer | null = null
@@ -46,12 +50,12 @@ export async function loadCrowdArchetypes(): Promise<CrowdArchetype[]> {
         }
       }
       if (!buf) throw new Error(`crowd model ${m.name} failed`)
-      return { ...m, season: m.season ?? 'any', ...parse(buf) }
+      return { name: m.name, gender: m.gender, age: m.age, season: m.season ?? 'any', stride: m.stride ?? 1.5, idleDur: m.idle ?? 3, ...parse(buf) }
     }),
   )
 }
 
-function parse(buf: ArrayBuffer): Omit<CrowdArchetype, 'name' | 'gender' | 'age' | 'season'> {
+function parse(buf: ArrayBuffer): Omit<CrowdArchetype, 'name' | 'gender' | 'age' | 'season' | 'stride' | 'idleDur'> {
   const dv = new DataView(buf)
   const hl = dv.getUint32(0, true)
   const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hl))) as {
@@ -102,12 +106,10 @@ function parse(buf: ArrayBuffer): Omit<CrowdArchetype, 'name' | 'gender' | 'age'
   return { geometry: g, vat, frames: header.frames }
 }
 
-export const crowdTime: IUniform<number> = { value: 0 }
-
 const vatHead = /* glsl */ `
 uniform sampler2D uVat;
-uniform float uTime;
-attribute vec4 aAnim; // clip start frame, clip frames, phase (0..1), cycles per second
+attribute vec4 aAnim; // walk: start frame, frames, phase (0..1); w = idle blend weight
+attribute vec4 aAnim2; // idle: start frame, frames, phase (0..1)
 attribute vec4 aTint; // top colour (rgb) and how strongly to apply it
 attribute vec4 aTint2; // bottoms colour (rgb), shoe darkness
 vec3 octDecode(float p) {
@@ -117,20 +119,34 @@ vec3 octDecode(float p) {
   if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
   return normalize(n);
 }
+void vatSample(vec3 clip, out vec3 p, out vec3 n) {
+  float f = fract(clip.z) * clip.y;
+  int f0 = int(clip.x) + int(floor(f));
+  int f1 = int(clip.x) + int(mod(floor(f) + 1.0, clip.y));
+  float t = fract(f);
+  vec4 a = texelFetch(uVat, ivec2(gl_VertexID, f0), 0);
+  vec4 b = texelFetch(uVat, ivec2(gl_VertexID, f1), 0);
+  p = mix(a.xyz, b.xyz, t);
+  n = normalize(mix(octDecode(a.w), octDecode(b.w), t));
+}
 `
 
+// Each person's phases are advanced on the CPU by distance walked (walk) or
+// time (idle), so changing speed never makes legs skip; walking and standing
+// cross-fade instead of popping.
 const vatFetch = /* glsl */ `
-  float vatF = fract(uTime * aAnim.w + aAnim.z) * aAnim.y;
-  int vf0 = int(aAnim.x) + int(floor(vatF));
-  int vf1 = int(aAnim.x) + int(mod(floor(vatF) + 1.0, aAnim.y));
-  float vatT = fract(vatF);
-  vec4 vatA = texelFetch(uVat, ivec2(gl_VertexID, vf0), 0);
-  vec4 vatB = texelFetch(uVat, ivec2(gl_VertexID, vf1), 0);
+  vec3 vatP, vatN;
+  if (aAnim.w < 0.999) vatSample(aAnim.xyz, vatP, vatN);
+  if (aAnim.w > 0.001) {
+    vec3 ip, inn;
+    vatSample(aAnim2.xyz, ip, inn);
+    if (aAnim.w >= 0.999) { vatP = ip; vatN = inn; }
+    else { vatP = mix(vatP, ip, aAnim.w); vatN = normalize(mix(vatN, inn, aAnim.w)); }
+  }
 `
 
 function patch(shader: { uniforms: Record<string, IUniform>; vertexShader: string }, vat: DataTexture, normals: boolean): void {
   shader.uniforms.uVat = { value: vat }
-  shader.uniforms.uTime = crowdTime
   shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\n${vatHead}`)
   if (normals) {
     // Re-tint clothing per person, keeping the fabric's shading detail.
@@ -148,22 +164,23 @@ function patch(shader: { uniforms: Record<string, IUniform>; vertexShader: strin
   if (normals)
     shader.vertexShader = shader.vertexShader.replace(
       '#include <beginnormal_vertex>',
-      `${vatFetch}\nvec3 objectNormal = normalize(mix(octDecode(vatA.w), octDecode(vatB.w), vatT));\n#ifdef USE_TANGENT\nvec3 objectTangent = vec3(1.0, 0.0, 0.0);\n#endif`,
+      `${vatFetch}\nvec3 objectNormal = vatN;\n#ifdef USE_TANGENT\nvec3 objectTangent = vec3(1.0, 0.0, 0.0);\n#endif`,
     )
   else shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `${vatFetch}\n#include <begin_vertex>`)
-  shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\ntransformed = mix(vatA.xyz, vatB.xyz, vatT);`)
+  shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\ntransformed = vatP;`)
 }
 
 /** One instanced draw for up to `capacity` people of an archetype. */
 export function createCrowdMesh(a: CrowdArchetype, capacity: number): InstancedMesh {
   const mat = new MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0 })
-  mat.customProgramCacheKey = () => 'nihon-crowd-v1'
+  mat.customProgramCacheKey = () => 'nihon-crowd-v2'
   mat.onBeforeCompile = (s) => patch(s, a.vat, true)
   const depth = new MeshDepthMaterial({ depthPacking: RGBADepthPacking })
   depth.onBeforeCompile = (s) => patch(s, a.vat, false)
-  depth.customProgramCacheKey = () => 'nihon-crowd-depth-v1'
+  depth.customProgramCacheKey = () => 'nihon-crowd-depth-v2'
   const g = a.geometry.clone()
   g.setAttribute('aAnim', new InstancedBufferAttribute(new Float32Array(capacity * 4), 4))
+  g.setAttribute('aAnim2', new InstancedBufferAttribute(new Float32Array(capacity * 4), 4))
   g.setAttribute('aTint', new InstancedBufferAttribute(new Float32Array(capacity * 4), 4))
   g.setAttribute('aTint2', new InstancedBufferAttribute(new Float32Array(capacity * 4), 4))
   const mesh = new InstancedMesh(g, mat, capacity)

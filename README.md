@@ -114,9 +114,26 @@ python3 -I scripts/bake-rail.py N02-23/UTF-8 wd_stations.csv wd_lines.csv public
 python3 -I scripts/bake-population.py kontur_population_JP.gpkg public/data/population.bin
 # PLATEAU city index
 node scripts/bake-plateau.mjs
-# Characters and crowd LODs (Blender 4.2 + MPFB2)
-blender -b --python scripts/blender/make_humans.py -- --out public/models/people --mocap <cmu-bvh-dir> [--only a,b]
-blender -b --python scripts/blender/make_crowd.py -- public/models/people public/models/crowd [a,b]
+# Characters and crowd LODs (Blender 4.2 + MPFB2), masters in assets-src/
+blender -b --python scripts/blender/make_humans.py -- --out assets-src/models/people --mocap <cmu-bvh-dir> [--only a,b]
+blender -b --python scripts/blender/make_crowd.py -- assets-src/models/people public/models/crowd [a,b]
+# Shipped models: KTX2 textures + Draco geometry from the masters (needs KTX-Software's toktx)
+node scripts/optimize-assets.mjs [filter]
+```
+
+Characters are retargeted from CMU motion capture relative to each skeleton's rest pose, with eight
+different walkers assigned by archetype and a real standing idle. `scripts/blender/pose_sheet.py`
+renders a front/side contact sheet of any GLB's clips and prints posture measurements (shoulder drop,
+head pitch, trunk lean, step width) used as the gate for re-bakes.
+
+### Quality checks
+
+```bash
+npx vite build && npx vite preview --port 4173 &
+node scripts/qa.mjs            # 12 scenes → screenshots/qa/report.html (night readability, traffic, people, frame budget)
+node scripts/qa-load.mjs       # bytes, requests and seconds to play on an emulated 20 Mbps link
+node scripts/qa-profile.mjs    # main-thread CPU profile of steady play
+node scripts/e2e.mjs           # gameplay scenarios (dev server)
 ```
 
 The Wikidata CSVs come from two SPARQL queries (stations: `wdt:P31/wdt:P279* wd:Q55488` in Japan with

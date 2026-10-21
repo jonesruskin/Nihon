@@ -49,13 +49,14 @@ export class DemProvider {
     return this.cache.get(tileKey(t))
   }
 
-  load(t: TileId): Promise<DemTile> {
+  /** `priority`: lower first, shared scale with the rest of the tile queue. */
+  load(t: TileId, priority = 0): Promise<DemTile> {
     const k = tileKey(t)
     const hit = this.cache.get(k)
     if (hit) return Promise.resolve(hit)
     let p = this.pending.get(k)
     if (!p) {
-      p = this.fetchTile(t).then((tile) => {
+      p = this.fetchTile(t, priority).then((tile) => {
         this.pending.delete(k)
         this.cache.set(k, tile)
         this.order.push(k)
@@ -70,17 +71,17 @@ export class DemProvider {
     return p
   }
 
-  private async fetchTile(t: TileId): Promise<DemTile> {
+  private async fetchTile(t: TileId, priority: number): Promise<DemTile> {
     const heights = new Float32Array(DEM_SIZE * DEM_SIZE)
     let na = DEM_SIZE * DEM_SIZE
-    const gsi = await fetchImageData(GSI_DEM(t)).catch(() => null)
+    const gsi = await fetchImageData(GSI_DEM(t), priority).catch(() => null)
     if (gsi) na = decodeGSI(gsi.data, heights)
     let hasSea = na > 0
     let sea: Uint8Array | undefined
     if (na > 0) {
       sea = new Uint8Array(DEM_SIZE * DEM_SIZE)
       // Fill gaps (sea / outside Japan) from Terrarium; clamp bathymetry.
-      const ter = await fetchImageData(TERRARIUM(t)).catch(() => null)
+      const ter = await fetchImageData(TERRARIUM(t), priority).catch(() => null)
       const tmp = new Float32Array(DEM_SIZE * DEM_SIZE)
       if (ter) decodeTerrarium(ter.data, tmp)
       for (let i = 0; i < heights.length; i++) {

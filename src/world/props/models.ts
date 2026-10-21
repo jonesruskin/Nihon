@@ -290,7 +290,7 @@ export function createMastModel(): PropModel {
     colored(at(new BoxGeometry(0.05, 0.9, 0.05), 0, 5.75, 2.7), steel), // dropper to contact wire
     colored(at(new BoxGeometry(0.4, 0.3, 0.3), 0, 0.15, 0), 0x777a7c), // footing
   ]
-  return { geometry: assemble(parts), materials: [vc({ roughness: 0.55, metalness: 0.5 })], castShadow: true }
+  return { geometry: assemble(parts), materials: [vc({ roughness: 0.55, metalness: 0.5 })], castShadow: false }
 }
 
 export function createStreetLightModel(): PropModel {
@@ -299,17 +299,19 @@ export function createStreetLightModel(): PropModel {
     colored(at(new CylinderGeometry(0.05, 0.05, 2.2, 6), 0, 8.0, 1.0, Math.PI / 2 - 0.15, 0, 0), 0x8a8d90),
     colored(at(new BoxGeometry(0.35, 0.12, 0.7), 0, 8.15, 2.05), 0x6a6d70),
   ]
-  const lamp = colored(at(new BoxGeometry(0.3, 0.03, 0.6), 0, 8.08, 2.05), 0xffffff, 1)
-  parts.push(lamp)
-  const lampMat = new MeshStandardMaterial({ color: 0xf2efe6, emissive: 0xffe2b0, emissiveIntensity: 0, roughness: 0.4 })
-  lampMat.name = 'lamp'
-  lampMat.onBeforeCompile = (s) => {
+  // The lens is the only pure-white part: one material for the whole lamp
+  // (one draw call per bucket), glowing where the vertex colour is white.
+  parts.push(colored(at(new BoxGeometry(0.3, 0.03, 0.6), 0, 8.08, 2.05), 0xffffff))
+  const mat = vc({ roughness: 0.5, metalness: 0.6 })
+  mat.name = 'streetlight'
+  mat.onBeforeCompile = (s) => {
     s.uniforms.uNight = buildingUniforms.uNight
     s.fragmentShader = s.fragmentShader
       .replace('#include <common>', '#include <common>\nuniform float uNight;')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance = vec3(1.0, 0.93, 0.84) * 6.0 * uNight;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += step(2.97, vColor.r + vColor.g + vColor.b) * vec3(1.0, 0.93, 0.84) * 6.0 * uNight;')
   }
-  return { geometry: assemble(parts), materials: [vc({ roughness: 0.5, metalness: 0.6 }), lampMat], castShadow: true }
+  mat.customProgramCacheKey = () => 'nihon-streetlight'
+  return { geometry: assemble(parts), materials: [mat], castShadow: true }
 }
 
 function vendingFront(): CanvasTexture {
@@ -341,6 +343,31 @@ function vendingFront(): CanvasTexture {
   })
 }
 
+/** Air-conditioner outdoor unit (室外機): rows of them on every flat roof. */
+export function createAcUnitModel(): PropModel {
+  const body = colored(at(new BoxGeometry(0.82, 0.62, 0.3), 0, 0.31 + 0.12, 0), 0xdcdcd6)
+  const fan = colored(at(new CylinderGeometry(0.22, 0.22, 0.02, 14), 0.12, 0.43, 0.155, Math.PI / 2), 0x3c3d3e)
+  const feet = colored(at(new BoxGeometry(0.78, 0.12, 0.34), 0, 0.06, 0), 0x6a6b6c)
+  return { geometry: assemble([body, fan, feet]), materials: [vc({ roughness: 0.6, metalness: 0.2 })], castShadow: false }
+}
+
+/** Rooftop water tank (高置水槽): FRP panel tank on a steel frame. */
+export function createTankModel(): PropModel {
+  const tank = colored(at(new BoxGeometry(2.2, 1.6, 1.6), 0, 0.8 + 0.7, 0), 0xcfd5cc)
+  const parts = [tank]
+  for (const x of [-0.95, 0.95]) for (const z of [-0.7, 0.7]) parts.push(colored(at(new BoxGeometry(0.12, 0.7, 0.12), x, 0.35, z), 0x5b5f63))
+  for (let i = -2; i <= 2; i++) parts.push(colored(at(new BoxGeometry(0.03, 1.62, 1.62), i * 0.44, 1.5, 0), 0xb9c0b8))
+  return { geometry: assemble(parts), materials: [vc({ roughness: 0.7 })], castShadow: true }
+}
+
+/** Yagi TV aerial on a short mast, the silhouette of every house roof. */
+export function createAntennaModel(): PropModel {
+  const parts = [colored(at(new CylinderGeometry(0.025, 0.03, 2.4, 6), 0, 1.2, 0), 0x9a9c9e)]
+  parts.push(colored(at(new BoxGeometry(0.03, 0.03, 1.6), 0, 2.25, 0), 0x9a9c9e))
+  for (let i = 0; i < 7; i++) parts.push(colored(at(new BoxGeometry(0.62 - i * 0.04, 0.015, 0.015), 0, 2.25, -0.75 + i * 0.25), 0xa5a7a9))
+  return { geometry: assemble(parts), materials: [vc({ roughness: 0.5, metalness: 0.6 })], castShadow: false }
+}
+
 export function createVendingModel(): PropModel {
   const body = colored(at(new BoxGeometry(1.0, 1.83, 0.75), 0, 0.915, 0), 0xffffff)
   const front = at(new PlaneGeometry(0.94, 1.76), 0, 0.915, 0.376)
@@ -353,7 +380,7 @@ export function createVendingModel(): PropModel {
       .replace('#include <common>', '#include <common>\nuniform float uNight;')
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * (0.12 + 0.4 * uNight);')
   }
-  return { geometry: assemble([body, front]), materials: [vc({ roughness: 0.4, metalness: 0.1 }), frontMat], castShadow: true }
+  return { geometry: assemble([body, front]), materials: [vc({ roughness: 0.4, metalness: 0.1 }), frontMat], castShadow: false }
 }
 
 export function createPillarModel(): PropModel {
@@ -381,7 +408,7 @@ export function createSignalModel(): PropModel {
   lightMat.onBeforeCompile = (s) => {
     s.fragmentShader = s.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance = vColor.rgb * 6.0;')
   }
-  return { geometry: assemble(parts), materials: [vc({ roughness: 0.6, metalness: 0.4 }), lightMat], castShadow: true }
+  return { geometry: assemble(parts), materials: [vc({ roughness: 0.6, metalness: 0.4 }), lightMat], castShadow: false }
 }
 
 export function createSphereLamp(): BufferGeometry {

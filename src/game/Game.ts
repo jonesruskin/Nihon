@@ -1,6 +1,9 @@
 // NIHON game orchestrator: boots the world at a real place in Japan, streams
 // it in around the player, and runs the frame loop.
-import { BufferAttribute, BufferGeometry, LineBasicMaterial, LineSegments, Raycaster, Vector3, type Mesh } from 'three'
+import { initGltf } from '../core/gltf'
+import { lampUniforms } from '../render/lamps'
+import { deviceTier, FrameGovernor, TIERS } from '../render/FrameGovernor'
+import { BufferAttribute, BufferGeometry, Color, Frustum, LineBasicMaterial, LineSegments, Matrix4, Raycaster, Sphere, Vector3, type InstancedMesh, type Light, type Mesh, type Object3D } from 'three'
 import { WorldFrame } from '../core/frame'
 import { GameClock, fromJst, jstParts } from '../core/clock'
 import { pendingRequests } from '../core/net'
@@ -88,7 +91,7 @@ function readParams(): StartParams {
     heading: num('heading', 300),
     pitch: num('pitch', -5),
     altitude,
-    quality: (q.get('quality') as QualityTier) ?? 'high',
+    quality: (q.get('quality') as QualityTier | null) ?? 'high',
     mode: q.get('mode') === 'fly' || altitude > 3 ? 'fly' : 'onfoot',
     character: q.get('char') ?? 'player_m',
   }
@@ -139,10 +142,15 @@ export class Game {
   readonly nearPeople: NearPeople
   readonly address = new AddressLookup()
   private currentPref = 0
-  private autoQualityTimer = 0
-  private autoQualityDrops = 0
   private bench = new URLSearchParams(location.search).has('bench') ? new Bench() : null
   private benchSpin = false
+  private governor: FrameGovernor
+  private ownLamp = { pos: new Vector3(), dir: new Vector3(), color: new Color(1, 0.96, 0.9), intensity: 110, range: 55, outer: 0.5, inner: 0.22 }
+  private gpuName = ''
+  /** Main-thread ms per frame (smoothed), of which submitting the render; decaying peak. */
+  private cpuFrame = 0
+  private cpuRender = 0
+  private cpuPeak = 0
   private explicitQuality = new URLSearchParams(location.search).has('quality') || this.bench !== null
   private placedTimer = 0
   private nearSpot: Spot | null = null
@@ -169,8 +177,13 @@ export class Game {
   private bento: string | null = null
   private bentoTimer = 0
   private avatarName = ''
-  private dressing = false
+  private dressing: Promise<void> | null = null
+  private loggedTerrain = false
+  private warmFrames = 0
   private dressTimer = 4
+  private nightlifeTimer = 0
+  /** 0 quiet streets .. 1 a nightlife district (bars, karaoke, clubs nearby). */
+  private nightlife = 0
   mode: Mode = 'loading'
   private last = performance.now()
   private elapsed = 0
@@ -188,6 +201,12 @@ export class Game {
     this.hud = new Hud(ui)
     this.nearPeople = new NearPeople(this.characters)
     this.pipeline = new RenderPipeline(canvas, this.world)
+    initGltf(this.pipeline.renderer)
+    // Start at the tier this device can hold at full frame rate.
+    const device = deviceTier(this.pipeline.renderer.getContext())
+    this.gpuName = device.gpu
+    if (!this.explicitQuality) this.params.quality = device.tier
+    this.governor = new FrameGovernor(this.explicitQuality ? this.params.quality : device.ceiling)
     this.terrain = new TerrainManager(this.world)
     this.plateau = new PlateauManager(this.world, this.pipeline.camera, this.pipeline.renderer)
     this.vector = new VectorManager(this.world, this.terrain, this.plateau)
@@ -232,7 +251,7 @@ export class Game {
       sound: (n) => this.sound.play(n),
       worldReadyAt: (p) => {
         const g = this.world.geodeticFromWorld(p)
-        return this.terrain.isDetailedAt(g.lat, g.lon) && this.vector.pending === 0
+        return this.terrain.isDetailedAt(g.lat, g.lon) && this.vector.readyNear(g.lat, g.lon, 400)
       },
     })
     this.stationPanel = new StationPanel(ui, () => this.rail.net, {
@@ -393,11 +412,11 @@ export class Game {
     this.vector.onTile = ({ build, group }) => {
       const key = `v:${build.id.z}/${build.id.x}/${build.id.y}`
       this.colliders.removePrefix(key + ':')
-      for (const child of group.children) {
+      group.children.forEach((child, i) => {
         const m = child as Mesh
-        if (!m.isMesh || (m as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) continue
-        if (['buildings', 'roads', 'structures', 'roofs'].includes(m.name)) this.colliders.addMesh(`${key}:${m.name}`, m)
-      }
+        if (!m.isMesh || (m as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) return
+        if (['buildings', 'roads', 'structures', 'roofs'].includes(m.name)) this.colliders.addMesh(`${key}:${m.name}:${i}`, m)
+      })
       const cyl: Array<[number, number, number, number, number]> = []
       const I = build.instances
       for (let i = 0; i < I.pole.length; i += 6) cyl.push([I.pole[i], I.pole[i + 1], I.pole[i + 2], 6, 0.2])
@@ -415,23 +434,22 @@ export class Game {
 
   async start(): Promise<void> {
     const p = this.params
-    this.hud.setLoading(0.05, 'Precomputing the sky over Japan…')
+    this.hud.setLoading(0.05, 'Opening the map of Japan…')
     this.applyQuality(p.quality)
-    await Promise.all([
-      this.pipeline.init(),
-      this.plateau.init(),
-      this.physics.init(),
-      this.characters.init(),
-      this.rail.load().catch((e) => console.warn('rail network unavailable', e)),
-      this.crowd.init(Math.ceil(this.crowd.cap / 5)).catch((e) => console.warn('crowd unavailable', e)),
-      this.placed.init().catch((e) => console.warn('props unavailable', e)),
-      this.address.load().catch((e) => console.warn('municipality table unavailable', e)),
-      PopulationGrid.load()
-        .then((g) => (this.population = g))
-        .catch((e) => console.warn('population grid unavailable', e)),
-    ])
+    // Only what the first frame needs blocks play. The player's own model
+    // starts downloading as soon as the manifest is in.
+    const avatar = this.characters.init().then(() => this.dressAvatar())
+    const mark = <T,>(n: string, q: Promise<T>) => q.then((v) => (console.info(`[load] ${n}`), v))
+    // The sky precompute runs on the GPU while the map streams over the network.
+    // (`?skylast` serialises them: software GPUs in CI stall image decoding
+    // behind the precompute, which would hide the streaming time we measure.)
+    const skyLast = new URLSearchParams(location.search).has('skylast')
+    let sky = skyLast ? Promise.resolve() : mark('sky', this.pipeline.init())
+    await Promise.all([mark('plateau', this.plateau.init()), mark('physics', this.physics.init())])
     this.hud.setLoading(0.2, 'Reading the terrain (国土地理院)…')
+    this.terrain.prefetchChain(p.lat, p.lon)
     await this.terrain.prefetchAround(p.lat, p.lon, 300)
+    console.info('[load] elevation')
     const ground = this.terrain.heightAt(p.lat, p.lon)
     const cam = this.pipeline.camera
     cam.position.copy(this.world.worldFromGeodetic(p.lat, p.lon, ground + Math.max(1.7, p.altitude)))
@@ -440,32 +458,54 @@ export class Game {
     cam.rotation.set(this.rig.pitch, this.rig.yaw, 0, 'YXZ')
     requestAnimationFrame(this.frame)
 
-    // Stream until the spot is ready at full detail.
-    const t0 = performance.now()
-    const cities = this.plateau.citiesAt(p.lat, p.lon)
-    while (performance.now() - t0 < 90_000) {
-      const terrainOk = this.terrain.isDetailedAt(p.lat, p.lon)
-      const vectorOk = this.vector.loadedCount > 0 && this.vector.pending === 0
-      const progress = 0.25 + (terrainOk ? 0.35 : 0) + (vectorOk ? 0.3 : 0)
-      this.hud.setLoading(
-        progress,
-        !terrainOk
-          ? 'Draping aerial photographs on the land…'
-          : !vectorOk
-            ? 'Laying streets, rail and buildings (OpenStreetMap)…'
-            : cities.length
-              ? `Raising ${cities[0].name} (PLATEAU)…`
-              : 'Almost there…',
-      )
-      if (terrainOk && vectorOk) break
-      await new Promise((r) => setTimeout(r, 300))
-    }
+    await this.waitForWorld(p.lat, p.lon, 90_000, 0.25)
+    this.hud.setLoading(0.95, 'Lighting the sky…')
+    if (skyLast) sky = mark('sky', this.pipeline.init())
+    await Promise.all([sky, mark('avatar', avatar)])
     if (p.mode === 'onfoot') await this.spawnPlayer(p.lat, p.lon)
     else this.mode = 'fly'
+    console.info('[load] spawned')
     this.hud.setLoading(1, '')
+    await this.warmUp()
     this.hud.hideLoading()
     this.updateHints()
+    // Everything else streams in while the player is already walking.
+    void this.crowd.init(Math.ceil(this.crowd.cap / 5)).catch((e) => console.warn('crowd unavailable', e))
+    void this.placed.init().catch((e) => console.warn('props unavailable', e))
+    void this.rail.load().catch((e) => console.warn('rail network unavailable', e))
+    void this.address.load().catch((e) => console.warn('municipality table unavailable', e))
+    void PopulationGrid.load()
+      .then((g) => (this.population = g))
+      .catch((e) => console.warn('population grid unavailable', e))
     if (this.bench) void this.runBench()
+  }
+
+  /** Draw a couple of frames under the veil so shaders are compiled before the reveal. */
+  private warmUp(): Promise<void> {
+    this.warmFrames = 2
+    this.pipeline.snapExposure = true
+    return new Promise((done) => {
+      const check = () => (this.warmFrames > 0 ? requestAnimationFrame(check) : done())
+      requestAnimationFrame(check)
+    })
+  }
+
+  /** Ground under the spot at full detail and the streets within ~600 m:
+   *  enough to stand in. Wider rings keep streaming after the veil lifts. */
+  private async waitForWorld(lat: number, lon: number, limitMs: number, base: number): Promise<void> {
+    const t0 = performance.now()
+    const near = 600
+    while (performance.now() - t0 < limitMs) {
+      const terrainOk = this.terrain.isDetailedAt(lat, lon)
+      const vectorOk = this.vector.readyNear(lat, lon, near)
+      this.hud.setLoading(
+        base + (terrainOk ? 0.35 : 0) + (vectorOk ? 0.3 : 0),
+        !terrainOk ? 'Draping aerial photographs on the land…' : !vectorOk ? 'Laying streets, rail and buildings (OpenStreetMap)…' : 'Almost there…',
+      )
+      if (terrainOk && !this.loggedTerrain) (this.loggedTerrain = true), console.info('[load] terrain')
+      if (terrainOk && vectorOk) return console.info(`[load] world ready (${this.pipeline.renderer.info.render.frame} frames)`)
+      await new Promise((r) => setTimeout(r, 200))
+    }
   }
 
   /** ?bench: a turn on the spot at three kinds of place, then a report. */
@@ -484,9 +524,7 @@ export class Game {
       this.benchSpin = false
     }
     r.info.autoReset = true
-    const gl = r.getContext()
-    const ext = gl.getExtension('WEBGL_debug_renderer_info')
-    const gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'GPU unknown'
+    const gpu = this.gpuName || 'GPU unknown'
     const panel = document.createElement('div')
     panel.className = 'bench'
     panel.innerHTML = b.html(this.params.quality, gpu)
@@ -505,16 +543,19 @@ export class Game {
     this.crowd.cap = c[1]
     this.weather.budget = { low: 3000, medium: 6000, high: 10000, ultra: 16000 }[q]
     const t = {
-      low: { far: 30_000, split: 1.3, near: 800, vfar: 1300, err: 48 },
-      medium: { far: 60_000, split: 1.5, near: 1200, vfar: 2000, err: 32 },
-      high: { far: 90_000, split: 1.6, near: 1500, vfar: 2600, err: 24 },
-      ultra: { far: 120_000, split: 2.0, near: 1800, vfar: 3200, err: 16 },
+      low: { far: 30_000, split: 1.3, near: 800, vfar: 1300, err: 48, pr: 500 },
+      medium: { far: 45_000, split: 1.25, near: 1200, vfar: 2000, err: 32, pr: 800 },
+      high: { far: 70_000, split: 1.3, near: 1500, vfar: 2600, err: 24, pr: 1100 },
+      ultra: { far: 120_000, split: 1.8, near: 1800, vfar: 3200, err: 16, pr: 1600 },
     }[q]
+    this.traffic.cap = { low: 50, medium: 90, high: 140, ultra: 180 }[q]
+    this.traffic.maxNear = { low: 3, medium: 4, high: 6, ultra: 10 }[q]
+    this.plateau.radius = t.pr
+    this.plateau.errorTarget = t.err
     this.terrain.settings.farRadius = t.far
     this.terrain.settings.splitFactor = t.split
     this.vector.nearRadius = t.near
     this.vector.farRadius = t.vfar
-    this.plateau.errorTarget = t.err
   }
 
   /** Points on streets and footpaths near `at`, nearest first. */
@@ -817,8 +858,14 @@ export class Game {
 
   /** The tourist dresses for the weather too: a jacket and long sleeves
    *  below ~15°C, a T-shirt above ~18°C (in between, keep what you wear). */
-  private async dressAvatar(): Promise<void> {
-    if (this.dressing || !this.characters.manifest.length) return
+  private dressAvatar(): Promise<void> {
+    if (this.dressing) return this.dressing
+    this.dressing = this.dressAvatarNow().finally(() => (this.dressing = null))
+    return this.dressing
+  }
+
+  private async dressAvatarNow(): Promise<void> {
+    if (!this.characters.manifest.length) return
     const base = this.params.character.replace(/_w$/, '')
     const winterName = `${base}_w`
     const hasWinter = this.characters.manifest.some((m) => m.name === winterName)
@@ -830,7 +877,6 @@ export class Game {
     else if (T < 15) want = winterName
     else if (T > 18) want = base
     if (want === this.avatarName && this.avatar) return
-    this.dressing = true
     try {
       const next = await this.characters.create(want)
       if (this.avatar) {
@@ -842,8 +888,6 @@ export class Game {
       this.player.object.add(next.object)
     } catch (e) {
       console.warn('avatar failed', want, e)
-    } finally {
-      this.dressing = false
     }
   }
 
@@ -886,6 +930,7 @@ export class Game {
 
   private frame = (t: number): void => {
     requestAnimationFrame(this.frame)
+    const cpu0 = performance.now()
     const realDt = (t - this.last) / 1000
     const dt = Math.min(0.1, realDt)
     this.last = t
@@ -1053,7 +1098,23 @@ export class Game {
       const focus = this.mode === 'train' || this.mode === 'ferry' ? cam.position : this.mode === 'driving' && this.vehicles.current ? this.vehicles.current.position : this.ride ? this.ride.car.pos : this.player.feet
       this.traffic.playerPos = this.mode === 'onfoot' ? this.player.feet : null
       this.traffic.playerCar = this.mode === 'driving' && this.vehicles.current ? { pos: this.vehicles.current.position, length: this.vehicles.current.spec.length } : null
+      this.traffic.camPos.copy(cam.position)
+      cam.getWorldDirection(this.traffic.camDir)
+      this.traffic.night = this.pipeline.night
       this.traffic.update(dt, focus, this.clock.jst.hourFloat)
+      // Moving lights for the shader-lamp pool: your own headlights first.
+      const dyn = this.pipeline.lights.dynamic
+      dyn.length = 0
+      const own = this.mode === 'driving' ? this.vehicles.current : null
+      if (own) {
+        const fwd = this.ownLamp.dir.set(0, 0, -1).applyQuaternion(own.quaternion)
+        this.ownLamp.pos.copy(own.position).addScaledVector(fwd, own.spec.length / 2 + 0.3)
+        this.ownLamp.pos.y += 0.75
+        fwd.y -= 0.1
+        fwd.normalize()
+        dyn.push(this.ownLamp)
+      }
+      dyn.push(...this.traffic.headlamps)
       this.rail.updateAmbient(dt, cam.position, this.clock.jst.hourFloat)
       this.updateCrowd(dt, this.mode === 'onfoot' ? this.player.feet : cam.position)
     }
@@ -1082,19 +1143,28 @@ export class Game {
     updateWater(this.elapsed)
     buildingUniforms.uNight.value = night
     buildingUniforms.uTime.value = this.elapsed
-    // Adaptive quality: step down if the machine can't keep up.
-    if (!this.explicitQuality && this.mode !== 'loading' && this.elapsed > 20) {
-      this.autoQualityTimer += realDt
-      if (this.autoQualityTimer > 6) {
-        this.autoQualityTimer = 0
-        const order = ['low', 'medium', 'high', 'ultra'] as const
-        const i = order.indexOf(this.params.quality)
-        if (this.fps > 0 && this.fps < 22 && i > 0 && this.autoQualityDrops < 2) {
-          this.autoQualityDrops++
-          this.params.quality = order[i - 1]
-          this.applyQuality(this.params.quality)
-          this.hud.toast(`Graphics lowered to <b>${this.params.quality}</b> for smoother play (<kbd>Tab</kbd> → 設定 to change).`, 5000)
-        }
+    // Shops by the clock: shotengai shutters come down in the evening, while
+    // nightlife districts (dense, bright cores) stay open late.
+    {
+      const h = this.clock.jst.hourFloat
+      const base = h < 6 ? 0.12 : h < 9 ? 0.35 : h < 10 ? 0.6 : h < 19 ? 0.85 : h < 20 ? 0.7 : h < 22 ? 0.42 : 0.25
+      const late = h >= 17 || h < 3 ? 0.78 : base
+      if ((this.nightlifeTimer -= dt) < 0) {
+        this.nightlifeTimer = 3
+        this.nightlife = Math.min(1, this.vector.nightlifeNear(focus, 400) / 30)
+      }
+      buildingUniforms.uShopOpen.value = base + Math.max(0, late - base) * this.nightlife
+    }
+    // Dynamic resolution, then quality tier, to hold the display's refresh
+    // rate (90 FPS on fast screens). An explicit ?quality= pins the tier.
+    if (this.mode !== 'loading' && !this.hud.veiled && this.elapsed > 4 && !this.bench) {
+      const step = this.governor.sample(realDt, this.params.quality)
+      if (step?.scale !== undefined) this.pipeline.setRenderScale(step.scale)
+      if (step?.tier && !this.explicitQuality) {
+        const down = TIERS.indexOf(step.tier) < TIERS.indexOf(this.params.quality)
+        this.params.quality = step.tier
+        this.applyQuality(step.tier)
+        if (down) this.hud.toast(`Graphics set to <b>${step.tier}</b> to keep the frame rate up (<kbd>Tab</kbd> → 設定 to change).`, 5000)
       }
     }
     this.placedTimer -= dt
@@ -1111,7 +1181,17 @@ export class Game {
     this.updateSound(dt)
     if (this.liveTime && Math.abs(this.clock.date.getTime() - Date.now()) > 120_000 && this.mode !== 'train') this.liveTime = false
     if (this.benchSpin) this.rig.yaw += dt * ((Math.PI * 2) / 20)
-    this.pipeline.render(dt)
+    // Behind the opaque loading screen, drawing the world only steals time
+    // from streaming it (warm-up frames compile shaders before the reveal).
+    if (!this.hud.veiled || this.warmFrames > 0) {
+      if (this.warmFrames > 0) this.warmFrames--
+      const r0 = performance.now()
+      this.pipeline.render(dt)
+      this.cpuRender += (performance.now() - r0 - this.cpuRender) * 0.05
+    }
+    const used = performance.now() - cpu0
+    this.cpuFrame += (used - this.cpuFrame) * 0.05
+    this.cpuPeak = Math.max(this.cpuPeak * 0.995, used)
     if (this.bench) {
       const info = this.pipeline.renderer.info
       this.bench.sample(realDt, info.render.calls, info.render.triangles)
@@ -1186,6 +1266,9 @@ export class Game {
     const a = document.createElement('a')
     const j = this.clock.jst
     a.download = `nihon-${j.year}${String(j.month).padStart(2, '0')}${String(j.day).padStart(2, '0')}-${String(j.hour).padStart(2, '0')}${String(j.minute).padStart(2, '0')}.png`
+    // The drawing buffer isn't preserved between frames (faster on most
+    // GPUs): draw one now and read it back in the same task.
+    this.pipeline.render(0)
     a.href = c.toDataURL('image/png')
     a.click()
     const f = document.createElement('div')
@@ -1236,7 +1319,7 @@ export class Game {
       if (fest) this.pedDensity = Math.min(400, this.pedDensity * 3 + 40)
     }
     this.crowd.player = this.mode === 'onfoot' && this.player.body ? this.player.feet : null
-    this.crowd.update(dt, at, this.pedDensity, this.elapsed)
+    this.crowd.update(dt, at, this.pedDensity)
     this.crowdTarget = this.crowd.target
     if (this.nearPeople.max > 0) this.nearPeople.update(dt, this.pipeline.camera.position, this.crowd.nearest(this.pipeline.camera.position, this.nearPeople.max + 2))
   }
@@ -1568,21 +1651,16 @@ export class Game {
     this.world.rebase(lat, lon)
     this.places = []
     this.currentPlace = ''
+    this.terrain.prefetchChain(lat, lon)
     await this.terrain.prefetchAround(lat, lon, 300).catch(() => {})
     const ground = this.terrain.heightAt(lat, lon)
     const cam = this.pipeline.camera
     cam.position.copy(this.world.worldFromGeodetic(lat, lon, (Number.isNaN(ground) ? 0 : ground) + 1.7))
     if (heading !== undefined) this.rig.yaw = (-heading * Math.PI) / 180
-    const t0 = performance.now()
-    while (performance.now() - t0 < 60_000) {
-      const terrainOk = this.terrain.isDetailedAt(lat, lon)
-      const vectorOk = this.vector.loadedCount > 0 && this.vector.pending === 0
-      this.hud.setLoading(0.2 + (terrainOk ? 0.4 : 0) + (vectorOk ? 0.3 : 0), !terrainOk ? 'Draping aerial photographs on the land…' : 'Laying streets and buildings…')
-      if (terrainOk && vectorOk) break
-      await new Promise((r) => setTimeout(r, 300))
-    }
+    await this.waitForWorld(lat, lon, 60_000, 0.2)
     this.player.body?.setEnabled(true)
     await this.spawnPlayer(lat, lon)
+    await this.warmUp()
     this.hud.hideLoading()
     if (dest) {
       this.currentPlace = dest.kanji
@@ -1708,10 +1786,100 @@ export class Game {
     })
   }
 
+  /** QA: what one frame costs (gate F budgets), measured over the next frame. */
+  budget(): Promise<Record<string, number | string>> {
+    const r = this.pipeline.renderer
+    return new Promise((done) => {
+      requestAnimationFrame(() => {
+        r.info.autoReset = false
+        r.info.reset()
+        // Attribute every draw call of the next frame to what issued it.
+        const by: Record<string, number> = {}
+        const orig = r.renderBufferDirect
+        const mainCam = this.pipeline.camera
+        r.renderBufferDirect = function (cam, scene, geo, mat, obj, group) {
+          let top: Object3D = obj
+          while (top.parent && top.parent.type !== 'Scene') top = top.parent
+          const pass = (mat as { isMeshDepthMaterial?: boolean }).isMeshDepthMaterial || (mat as { isMeshDistanceMaterial?: boolean }).isMeshDistanceMaterial ? 'shadow' : obj.type === 'Mesh' && !top.parent ? 'post' : cam === mainCam ? 'main' : `cam(${cam.type}${cam.name ? ' ' + cam.name : ''})`
+          const k = `${pass}:${top.name || top.type}/${obj.name.replace(/\d.*$/, '') || obj.type}`
+          by[k] = (by[k] ?? 0) + 1
+          return orig.call(this, cam, scene, geo, mat, obj, group)
+        }
+        // Two frames: shadows are redrawn every other frame, so this is the
+        // true per-frame average. Count the frames actually drawn (a slow
+        // frame can fit two renders between animation callbacks).
+        let frames = 0
+        const pipe = this.pipeline
+        const render = pipe.render
+        pipe.render = function (dt: number) {
+          frames++
+          return render.call(this, dt)
+        }
+        const finish = () => {
+          if (frames < 2) return void requestAnimationFrame(finish)
+          pipe.render = render
+          r.renderBufferDirect = orig
+          const F = frames
+          const calls = Math.round(r.info.render.calls / F)
+          const triangles = Math.round(r.info.render.triangles / F)
+          const lines = Math.round(r.info.render.lines / F)
+          r.info.autoReset = true
+          const top = Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 24).map(([k, v]) => `${Math.round(v / F)} ${k}`).join(', ')
+          let lights = 0
+          let casters = 0
+          let casterTris = 0
+          this.pipeline.scene.traverseVisible((o) => {
+            if ((o as Light).isLight && (o as Light).intensity > 0) lights++
+            const m = o as Mesh
+            if (m.isMesh && m.castShadow) {
+              casters++
+              const g = m.geometry
+              const n = (g.index ? g.index.count : g.attributes.position.count) / 3
+              casterTris += n * ((m as InstancedMesh).isInstancedMesh ? (m as InstancedMesh).count : 1)
+            }
+          })
+          done({ calls, triangles, lines, programs: r.info.programs?.length ?? 0, textures: r.info.memory.textures, lights, casters, casterTris: Math.round(casterTris), quality: this.params.quality, scale: this.governor.scale, lamps: lampUniforms.uLampCount.value, top })
+        }
+        requestAnimationFrame(finish)
+      })
+    })
+  }
+
+  /** QA: draws and triangles the main view would submit, by kind (frustum-tested). */
+  debugDraws(): Record<string, string> {
+    const cam = this.pipeline.camera
+    cam.updateMatrixWorld()
+    const fr = new Frustum().setFromProjectionMatrix(new Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse))
+    const out: Record<string, [number, number]> = {}
+    const sphere = new Sphere()
+    this.pipeline.scene.traverseVisible((o) => {
+      const m = o as Mesh
+      if (!m.isMesh) return
+      if (m.frustumCulled !== false) {
+        const bs = (m as unknown as { boundingSphere?: Sphere | null }).boundingSphere ?? (m.geometry.boundingSphere || (m.geometry.computeBoundingSphere(), m.geometry.boundingSphere))
+        if (bs && !fr.intersectsSphere(sphere.copy(bs).applyMatrix4(m.matrixWorld))) return
+      }
+      const g = m.geometry
+      const tris = ((g.index ? g.index.count : g.attributes.position.count) / 3) * ((m as InstancedMesh).isInstancedMesh ? (m as InstancedMesh).count : 1)
+      let top: Object3D = m
+      while (top.parent && top.parent !== this.pipeline.scene) top = top.parent
+      const k = `${top.name || top.type}/${m.name.replace(/\d.*$/, '') || m.type}`
+      const e = (out[k] ??= [0, 0])
+      e[0] += Array.isArray(m.material) ? m.material.length : 1
+      e[1] += tris
+    })
+    return Object.fromEntries(Object.entries(out).sort((a, b) => b[1][0] - a[1][0]).map(([k, [c, t]]) => [k, `${c} draws ${Math.round(t / 1000)}k`]))
+  }
+
   /** Debug/test helper. */
   stats(): Record<string, number | string> {
     return {
       fps: Math.round(this.fps),
+      gameTime: Math.round(this.elapsed * 10) / 10,
+      lampLoad: Math.round(this.pipeline.lights.lampLoad * 10) / 10,
+      cpuMs: Math.round(this.cpuFrame * 10) / 10,
+      cpuRenderMs: Math.round(this.cpuRender * 10) / 10,
+      cpuPeakMs: Math.round(this.cpuPeak * 10) / 10,
       mode: this.mode,
       terrainReady: this.terrain.readyCount,
       terrainVisible: this.terrain.visibleCount,
@@ -1721,6 +1889,10 @@ export class Game {
       physics: this.physics.staticCount,
       settled: Number(this.mode !== 'loading' && this.elapsed > 8 && pendingRequests() === 0),
       peds: this.crowd.peds.length,
+      cars: this.traffic.cars.length,
+      carsNear: this.traffic.cars.filter((c) => c.pos.distanceTo(this.pipeline.camera.position) < 150).length,
+      carModels: this.traffic.cars.filter((c) => c.model).length,
+      carTarget: this.traffic.targetCount(),
       pedTarget: Math.round(this.crowdTarget),
       pedPerHa: Math.round(this.pedDensity * 10) / 10,
       forestTrees: this.forest.count,

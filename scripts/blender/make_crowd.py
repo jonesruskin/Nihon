@@ -11,7 +11,7 @@
 #   frames   i16 * nVert * 4 * nFrames   (xyz quantised to bounds, w = packed normal xy)
 # Header: {verts, indices, frames:{walk:[start,count], idle:[...]}, min:[x,y,z], max:[x,y,z]}
 #
-# Usage: blender -b --python scripts/blender/make_crowd.py -- public/models/people public/models/crowd [name,name]
+# Usage: blender -b --python scripts/blender/make_crowd.py -- assets-src/models/people public/models/crowd [name,name]
 import bpy, bmesh, json, os, struct, sys, math
 from mathutils import Vector
 
@@ -19,7 +19,7 @@ src, dst = sys.argv[sys.argv.index('--') + 1:][:2]
 os.makedirs(dst, exist_ok=True)
 TARGET_TRIS = 1800
 WALK_FRAMES = 24
-IDLE_FRAMES = 8
+IDLE_FRAMES = 24
 
 
 def wipe():
@@ -204,5 +204,9 @@ names = []
 for m in manifest:
     if only is None or m['name'] in only:
         bake(os.path.join(src, m['file']), m['name'])
-    names.append({'name': m['name'], 'gender': m['gender'], 'age': m['age'], 'season': m.get('season', 'any')})
+    # Stride (m per walk cycle) lets the game drive each person's cycle by
+    # distance walked, so feet stay planted at any speed.
+    walk = m.get('clips', {}).get('walk', 1.1)
+    names.append({'name': m['name'], 'gender': m['gender'], 'age': m['age'], 'season': m.get('season', 'any'),
+                  'stride': round(m.get('speeds', {}).get('walk', 1.35) * walk, 3), 'idle': m.get('clips', {}).get('idle', 3.0)})
 json.dump(names, open(os.path.join(dst, 'manifest.json'), 'w'), indent=1)
